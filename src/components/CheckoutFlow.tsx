@@ -488,28 +488,60 @@ export function PaymentDetailsPage() {
   const [error, setError] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [stale, setStale] = useState(false);
+  const [loadingDetails, setLoadingDetails] = useState(true);
   const navigate = useNavigate();
   useEffect(() => {
-    Promise.all([
-      getPaymentMethodById(methodId),
-      getPlanByIdWithCache(planId),
-      getActiveBrokersWithCache(),
-    ])
-      .then(([paymentMethod, selectedPlan, brokerResult]) => {
-        setMethod(paymentMethod);
-        setPlan(selectedPlan);
-        setBrokers(brokerResult.data);
-        setStale(brokerResult.source === "cache");
-      })
-      .catch((caught) =>
-        setError(caught instanceof Error ? caught.message : "Unable to load payment details."),
-      );
+    let cancelled = false;
+    const loadDetails = async () => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const [paymentMethod, selectedPlan, brokerResult] = await Promise.all([
+            getPaymentMethodById(methodId),
+            getPlanByIdWithCache(planId),
+            getActiveBrokersWithCache(),
+          ]);
+          if (!paymentMethod || !selectedPlan || !brokerResult.data.length)
+            throw new Error("Payment details are still loading.");
+          if (cancelled) return;
+          setMethod(paymentMethod);
+          setPlan(selectedPlan);
+          setBrokers(brokerResult.data);
+          setStale(brokerResult.source === "cache");
+          setError("");
+          setLoadingDetails(false);
+          return;
+        } catch (caught) {
+          lastError = caught;
+          if (attempt < 3)
+            await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) {
+        setError(
+          lastError instanceof Error ? lastError.message : "Unable to load payment details.",
+        );
+        setLoadingDetails(false);
+      }
+    };
+    void loadDetails();
+    return () => {
+      cancelled = true;
+    };
   }, [methodId, planId]);
   if (loading) return <LoadingPage />;
   if (!user)
     return (
       <AuthRequired
         next={`/checkout/details?plan=${planId}&broker=${brokerId}&method=${methodId}`}
+      />
+    );
+  if (loadingDetails)
+    return (
+      <FlowShell
+        eyebrow="Payment"
+        title="Loading payment details"
+        copy="We are preparing the payment method and deposit instructions."
       />
     );
   const broker = brokers.find((entry) => entry.id === brokerId);
@@ -637,6 +669,7 @@ export function PaymentProofPage() {
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [error, setError] = useState("");
   const [loadingOrder, setLoadingOrder] = useState(true);
+  const [submittingProof, setSubmittingProof] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
     if (!user || !orderId) {
@@ -699,6 +732,9 @@ export function PaymentProofPage() {
       setError("A payment screenshot is required.");
       return;
     }
+    if (submittingProof) return;
+    setSubmittingProof(true);
+    setError("");
     try {
       await submitPaymentForOrder({
         orderId: order.id,
@@ -708,6 +744,7 @@ export function PaymentProofPage() {
       navigate({ to: "/dashboard" });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to submit payment proof.");
+      setSubmittingProof(false);
     }
   };
   return (
@@ -756,9 +793,13 @@ export function PaymentProofPage() {
               />
             </label>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <button className="btn-gold w-fit" type="submit">
+            <button
+              className="btn-gold w-fit disabled:cursor-not-allowed disabled:opacity-60"
+              type="submit"
+              disabled={submittingProof}
+            >
               <Upload size={15} />
-              Submit Payment
+              {submittingProof ? "Submitting..." : "Submit Payment"}
             </button>
           </form>
         </div>
@@ -834,8 +875,14 @@ export function UserOrdersDashboardPage() {
   }, [orders]);
 
   const selectOrder = (orderId: string) => {
-    setSelectedOrderId(orderId);
-    localStorage.setItem("qxt-selected-order", orderId);
+    setSelectedOrderId((current) => {
+      const nextOrderId = current === orderId ? null : orderId;
+      if (typeof window !== "undefined") {
+        if (nextOrderId) localStorage.setItem("qxt-selected-order", nextOrderId);
+        else localStorage.removeItem("qxt-selected-order");
+      }
+      return nextOrderId;
+    });
   };
 
   const loadCredentials = async (orderId: string) => {
@@ -922,7 +969,7 @@ export function UserOrdersDashboardPage() {
                         onClick={() => selectOrder(order.id)}
                         aria-expanded={isSelected}
                       >
-                        {isSelected ? "Hide details" : "View"}
+                        {isSelected ? "Hide details" : "View details"}
                       </button>
                     </div>
 

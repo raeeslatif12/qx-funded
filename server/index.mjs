@@ -801,8 +801,10 @@ app.post(
         "UPDATE orders SET payment_status='pending',order_status='pending_verification',transaction_id=$1,payment_proof=$2,updated_at=now() WHERE id=$3",
         [req.body.transactionId || null, proofPath, req.params.id],
       );
-      await audit(client, req.user.id, "payment.proof_submitted", "order", req.params.id);
       await client.query("COMMIT");
+      void audit(pool, req.user.id, "payment.proof_submitted", "order", req.params.id).catch(
+        () => undefined,
+      );
       res.status(201).json({ status: "pending_verification" });
     } catch (error) {
       await client.query("ROLLBACK");
