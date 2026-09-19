@@ -337,7 +337,9 @@ app.patch("/api/auth/account", auth, async (req, res, next) => {
 
 app.get("/api/plans", async (_req, res, next) => {
   try {
-    const result = await pool.query("SELECT * FROM plans WHERE active=true ORDER BY type, price");
+    const result = await pool.query(
+      "SELECT * FROM plans WHERE active=true AND id NOT LIKE 'custom-direct-%' ORDER BY type, price",
+    );
     res.json({ plans: result.rows });
   } catch (error) {
     next(error);
@@ -572,13 +574,56 @@ app.delete("/api/admin/payment-methods/:id", auth, adminOnly, async (req, res, n
 const orderSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true`;
 const orderDetailSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, fa.id AS funded_account_id, fa.account_email, fa.account_password_encrypted FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true LEFT JOIN funded_accounts fa ON fa.order_id=o.id`;
 
+function formatUsd(value) {
+  const rounded = Math.round(value * 100) / 100;
+  return `$${rounded.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function customDirectPlanFromId(planId) {
+  const match = /^custom-direct-(\d+)$/.exec(String(planId || ""));
+  if (!match) return null;
+  const cents = Number(match[1]);
+  if (!Number.isSafeInteger(cents) || cents < 1000) return null;
+  const amount = cents / 100;
+  const fundingSize = Math.round(amount * (3000 / 70) * 100) / 100;
+  return {
+    id: `custom-direct-${cents}`,
+    type: "Instant",
+    size: formatUsd(fundingSize),
+    price: amount,
+    dailyLoss: formatUsd((fundingSize * 7) / 30),
+    description: "Custom direct funding account",
+    features: ["Up to 92% split", "Instant funding", "Direct funding terms"],
+  };
+}
+
 app.post("/api/orders", auth, async (req, res, next) => {
   const { planId, brokerId, paymentMethodId } = req.body || {};
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const customPlan = customDirectPlanFromId(planId);
     const [plan, broker, method] = await Promise.all([
-      client.query("SELECT * FROM plans WHERE id=$1 AND active=true", [planId]),
+      customPlan
+        ? client.query(
+            `INSERT INTO plans (id,type,size,price,daily_loss,description,features,active,popular)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,true,false)
+             ON CONFLICT (id) DO UPDATE SET type=EXCLUDED.type,size=EXCLUDED.size,price=EXCLUDED.price,daily_loss=EXCLUDED.daily_loss,description=EXCLUDED.description,features=EXCLUDED.features,active=true,updated_at=now()
+             RETURNING *`,
+            [
+              customPlan.id,
+              customPlan.type,
+              customPlan.size,
+              customPlan.price,
+              customPlan.dailyLoss,
+              customPlan.description,
+              JSON.stringify(customPlan.features),
+            ],
+          )
+        : client.query("SELECT * FROM plans WHERE id=$1 AND active=true", [planId]),
       client.query("SELECT * FROM brokers WHERE id=$1 AND enabled=true", [brokerId]),
       client.query("SELECT * FROM payment_methods WHERE id=$1 AND enabled=true", [paymentMethodId]),
     ]);
@@ -589,12 +634,15 @@ app.post("/api/orders", auth, async (req, res, next) => {
     const p = plan.rows[0],
       b = broker.rows[0],
       m = method.rows[0];
+    const planName = p.id.startsWith("custom-direct-")
+      ? `Custom Direct Funding — ${formatUsd(Number(p.price))} → ${p.size}`
+      : p.size;
     const order = await client.query(
       `INSERT INTO orders (user_id,plan_id,plan_name,plan_price,broker_id,broker_name,payment_method_id,payment_method_name,network,deposit_address,amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$4) RETURNING *`,
       [
         req.user.id,
         p.id,
-        p.size,
+        planName,
         p.price,
         b.id,
         b.name,

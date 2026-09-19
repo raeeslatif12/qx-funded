@@ -1,3 +1,5 @@
+import { getCustomDirectPlanById } from "@/lib/qxt-data";
+
 export type AccountStatus = "active" | "pending" | "suspended" | "locked";
 export type PaymentStatus = "pending" | "confirmed" | "rejected";
 export type OrderStatus =
@@ -87,7 +89,6 @@ export type FundedAccount = {
   password: string;
   createdAt: string;
 };
-
 export type ConnectionMode = "server" | "local";
 export type ApiFailureKind = "network" | "timeout" | "http";
 
@@ -640,9 +641,27 @@ export function getPlansWithCache() {
   return serverFirstWithCache(CACHE_KEYS.plans, getPlans);
 }
 export async function getPlanById(id: string) {
+  const customPlan = getCustomDirectPlanById(id);
+  if (customPlan) {
+    return {
+      ...customPlan,
+      description: "Custom direct funding account",
+      features: ["Up to 92% split", "Instant funding", "Direct funding terms"],
+      active: true,
+    } as PlanRecord;
+  }
   return (await getPlans()).find((plan) => plan.id === id) ?? null;
 }
 export async function getPlanByIdWithCache(id: string) {
+  const customPlan = getCustomDirectPlanById(id);
+  if (customPlan) {
+    return {
+      ...customPlan,
+      description: "Custom direct funding account",
+      features: ["Up to 92% split", "Instant funding", "Direct funding terms"],
+      active: true,
+    } as PlanRecord;
+  }
   return (await getPlansWithCache()).data.find((plan) => plan.id === id) ?? null;
 }
 export async function getActiveBrokers() {

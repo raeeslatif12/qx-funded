@@ -19,7 +19,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { brokers, challengePlans, faqs, instantPlans, reviews, type Plan } from "@/lib/qxt-data";
+import {
+  brokers,
+  challengePlans,
+  customDirectPlanId,
+  faqs,
+  getCustomDirectPlan,
+  instantPlans,
+  reviews,
+  type Plan,
+} from "@/lib/qxt-data";
 import { useAuth } from "@/lib/auth";
 import {
   getActiveBrokersWithCache,
@@ -751,9 +760,10 @@ function Benefits() {
   );
 }
 
-export function PlanGrid({ plans }: { plans: Plan[] }) {
+export function PlanGrid({ plans, before }: { plans: Plan[]; before?: ReactNode }) {
   return (
     <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {before}
       {plans.map((p) => (
         <article key={p.id} className={`plan-card ${p.popular ? "popular" : ""}`}>
           {p.popular && <span className="popular-tag">Popular</span>}
@@ -938,9 +948,110 @@ export function StandardHero({
     </section>
   );
 }
+
+function CustomPlanCard({
+  customAmount,
+  customPlan,
+  customValidation,
+  onAmountChange,
+  selectCustomPlan,
+}: {
+  customAmount: string;
+  customPlan: Plan | null;
+  customValidation: string;
+  onAmountChange: (value: string) => void;
+  selectCustomPlan: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <section className="custom-plan-panel p-5">
+      <div>
+        <p className="eyebrow">Direct Funding</p>
+        <h2 className="mt-2 text-xl font-semibold">Create your own plan</h2>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          Enter your payment amount to see your funding details.
+        </p>
+      </div>
+      <form className="mt-5 grid gap-4" onSubmit={selectCustomPlan}>
+        <div>
+          <label htmlFor="custom-plan-amount">How much would you like to pay?</label>
+          <div className="relative mt-2">
+            <span className="pointer-events-none absolute inset-y-0 left-3 grid place-items-center text-muted-foreground">
+              $
+            </span>
+            <input
+              id="custom-plan-amount"
+              className="field pl-8"
+              type="number"
+              min="10"
+              step="0.01"
+              inputMode="decimal"
+              value={customAmount}
+              onChange={(event) => onAmountChange(event.target.value)}
+              placeholder="70.00"
+              aria-describedby="custom-plan-validation"
+            />
+          </div>
+          <p
+            id="custom-plan-validation"
+            className={`mt-2 text-xs ${customValidation ? "text-amber-300" : "text-muted-foreground"}`}
+          >
+            {customValidation || "Minimum payment: $10 USD"}
+          </p>
+        </div>
+        <div className="custom-plan-summary">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-muted-foreground">Your payment</span>
+            <strong>{customPlan ? `$${customPlan.price.toFixed(2)}` : "—"}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-muted-foreground">Funding account</span>
+            <strong className="text-gold">{customPlan?.size || "—"}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-muted-foreground">Daily loss limit</span>
+            <strong>{customPlan?.dailyLoss || "—"}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-muted-foreground">Profit split</span>
+            <strong className="text-gold">92%</strong>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm text-muted-foreground">Funding type</span>
+            <strong>Instant</strong>
+          </div>
+          <button type="submit" className="btn-gold mt-5 w-full" disabled={!customPlan}>
+            Continue with custom plan <ArrowRight size={15} />
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 export function AccountsPage() {
   const [tab, setTab] = useState<"instant" | "challenge">("instant");
+  const [customAmount, setCustomAmount] = useState("");
   const { plans, stale } = usePublicPlans();
+  const navigate = useNavigate();
+  const parsedCustomAmount = customAmount.trim() === "" ? Number.NaN : Number(customAmount);
+  const customPlan = getCustomDirectPlan(parsedCustomAmount);
+  const customValidation =
+    customAmount.trim() === ""
+      ? "Enter an amount of at least $10."
+      : !Number.isFinite(parsedCustomAmount) || parsedCustomAmount < 0
+        ? "Enter a valid positive USD amount."
+        : parsedCustomAmount < 10
+          ? "The minimum payment is $10."
+          : !Number.isSafeInteger(Math.round(parsedCustomAmount * 100))
+            ? "Enter a valid USD amount."
+            : "";
+
+  const selectCustomPlan = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!customPlan) return;
+    navigate({ to: "/checkout", search: { plan: customDirectPlanId(customPlan.price) } });
+  };
+
   return (
     <Layout>
       <StandardHero
@@ -965,6 +1076,15 @@ export function AccountsPage() {
             plans={plans.filter(
               (plan) => plan.type === (tab === "instant" ? "Instant" : "Challenge"),
             )}
+            before={
+              <CustomPlanCard
+                customAmount={customAmount}
+                customPlan={customPlan}
+                customValidation={customValidation}
+                onAmountChange={setCustomAmount}
+                selectCustomPlan={selectCustomPlan}
+              />
+            }
           />
           {stale && <SyncNotice kind="plans" />}
           <p className="mt-8 text-xs leading-6 text-muted-foreground">

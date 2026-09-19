@@ -455,6 +455,7 @@ export function PaymentDetailsPage() {
   const [brokers, setBrokers] = useState<BrokerRecord[]>([]);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
+  const [creatingOrder, setCreatingOrder] = useState(false);
   const [stale, setStale] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
@@ -554,8 +555,12 @@ export function PaymentDetailsPage() {
             </p>
             <button
               type="button"
-              className="btn-gold mt-7"
+              className="btn-gold mt-7 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={creatingOrder}
               onClick={async () => {
+                if (creatingOrder) return;
+                setCreatingOrder(true);
+                setError("");
                 try {
                   const order = await createOrUpdateCheckoutOrder({
                     planId,
@@ -568,10 +573,12 @@ export function PaymentDetailsPage() {
                   });
                 } catch (caught) {
                   setError(caught instanceof Error ? caught.message : "Unable to create order.");
+                } finally {
+                  setCreatingOrder(false);
                 }
               }}
             >
-              I Have Paid <ArrowRight size={15} />
+              {creatingOrder ? "Creating order..." : "I Have Paid"} <ArrowRight size={15} />
             </button>
             {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
           </div>

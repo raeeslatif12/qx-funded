@@ -9,6 +9,41 @@ export type Plan = {
   popular?: boolean;
 };
 
+export const DIRECT_FUNDING_FEE_RATIO = 70 / 3000;
+
+function formatUsd(value: number) {
+  const rounded = Math.round(value * 100) / 100;
+  return `$${rounded.toLocaleString("en-US", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+export function customDirectPlanId(paymentAmount: number) {
+  return `custom-direct-${Math.round(paymentAmount * 100)}`;
+}
+
+export function getCustomDirectPlan(paymentAmount: number): Plan | null {
+  if (!Number.isFinite(paymentAmount) || paymentAmount < 10) return null;
+  const amount = Math.round(paymentAmount * 100) / 100;
+  if (!Number.isSafeInteger(Math.round(amount * 100))) return null;
+  const fundingSize = Math.round((amount / DIRECT_FUNDING_FEE_RATIO) * 100) / 100;
+  return {
+    id: customDirectPlanId(amount),
+    size: formatUsd(fundingSize),
+    price: amount,
+    dailyLoss: formatUsd((fundingSize * 7) / 30),
+    type: "Instant",
+  };
+}
+
+export function getCustomDirectPlanById(id: string) {
+  const match = /^custom-direct-(\d+)$/.exec(id);
+  if (!match) return null;
+  const cents = Number(match[1]);
+  return Number.isSafeInteger(cents) ? getCustomDirectPlan(cents / 100) : null;
+}
+
 export const instantPlans: Plan[] = [
   { id: "instant-3000", size: "$3,000", price: 70, dailyLoss: "$700", type: "Instant" },
   { id: "instant-5000", size: "$5,000", price: 116, dailyLoss: "$1,167", type: "Instant" },
