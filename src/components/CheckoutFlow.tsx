@@ -1811,39 +1811,49 @@ export function AdminDashboardPage() {
                         placeholder="$1,250"
                       />
                     </label>
-                    <label className="grid gap-2 text-sm text-muted-foreground">
-                      Target
-                      <input
-                        value={newPlan.target}
-                        onChange={(event) =>
-                          setNewPlan((current) => ({ ...current, target: event.target.value }))
-                        }
-                        className="field"
-                        placeholder="$2,500"
-                      />
-                    </label>
-                    <label className="grid gap-2 text-sm text-muted-foreground">
-                      Drawdown
-                      <input
-                        value={newPlan.drawdown}
-                        onChange={(event) =>
-                          setNewPlan((current) => ({ ...current, drawdown: event.target.value }))
-                        }
-                        className="field"
-                        placeholder="$2,500"
-                      />
-                    </label>
-                    <label className="grid gap-2 text-sm text-muted-foreground md:col-span-2 xl:col-span-3">
-                      Description
-                      <textarea
-                        value={newPlan.description}
-                        onChange={(event) =>
-                          setNewPlan((current) => ({ ...current, description: event.target.value }))
-                        }
-                        className="field min-h-24"
-                        placeholder="Plan description"
-                      />
-                    </label>
+                    {newPlan.type === "Challenge" && (
+                      <>
+                        <label className="grid gap-2 text-sm text-muted-foreground">
+                          Target
+                          <input
+                            value={newPlan.target}
+                            onChange={(event) =>
+                              setNewPlan((current) => ({ ...current, target: event.target.value }))
+                            }
+                            className="field"
+                            placeholder="$2,500"
+                          />
+                        </label>
+                        <label className="grid gap-2 text-sm text-muted-foreground">
+                          Drawdown
+                          <input
+                            value={newPlan.drawdown}
+                            onChange={(event) =>
+                              setNewPlan((current) => ({
+                                ...current,
+                                drawdown: event.target.value,
+                              }))
+                            }
+                            className="field"
+                            placeholder="$2,500"
+                          />
+                        </label>
+                        <label className="grid gap-2 text-sm text-muted-foreground md:col-span-2 xl:col-span-3">
+                          Description
+                          <textarea
+                            value={newPlan.description}
+                            onChange={(event) =>
+                              setNewPlan((current) => ({
+                                ...current,
+                                description: event.target.value,
+                              }))
+                            }
+                            className="field min-h-24"
+                            placeholder="Plan description"
+                          />
+                        </label>
+                      </>
+                    )}
                     <label className="grid gap-2 text-sm text-muted-foreground md:col-span-2 xl:col-span-3">
                       Features (comma separated)
                       <input

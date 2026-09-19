@@ -378,12 +378,22 @@ app.post("/api/admin/plans", auth, adminOnly, async (req, res, next) => {
   try {
     const body = req.body || {};
     const type = String(body.type || "Instant").trim();
-    const size = String(body.size || "").trim();
     const price = Number(body.price ?? 0);
-    const dailyLoss = String(body.dailyLoss || "").trim();
-    const description = String(body.description || "").trim();
-    if (!size || !description || !dailyLoss || Number.isNaN(price))
-      return jsonError(res, 400, "Plan size, description, daily loss, and price are required.");
+    let size = String(body.size || "").trim();
+    let dailyLoss = String(body.dailyLoss || "").trim();
+    let description = String(body.description || "").trim();
+    if (type === "Instant" && Number.isFinite(price) && price >= 10) {
+      const fundingSize = Math.round(price * (3000 / 70) * 100) / 100;
+      size = formatUsd(fundingSize);
+      dailyLoss = formatUsd((fundingSize * 7) / 30);
+      description = description || "Direct instant funded account";
+    }
+    if (!size || !description || !dailyLoss || !Number.isFinite(price))
+      return jsonError(
+        res,
+        400,
+        "Enter a valid plan price and complete the Challenge plan fields.",
+      );
     const id = String(
       body.id || `${type.toLowerCase()}-${size.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
     ).trim();
