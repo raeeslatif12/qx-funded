@@ -951,6 +951,16 @@ app.patch("/api/admin/orders/:id/reject", auth, adminOnly, (req, res, next) =>
   rejectOrder(req, res, next),
 );
 
+function safeErrorMessage(error) {
+  const message = error instanceof Error ? error.message : "Unknown API error.";
+  return message
+    .replace(/postgres(?:ql):\/\/[^\s'\"]+/gi, "[redacted-database-url]")
+    .replace(
+      /((?:database_url|session_secret|funded_account_encryption_key|blob_read_write_token|admin_password|password|token|secret|key)\s*[=:]\s*)[^\s,;]+/gi,
+      "$1[redacted]",
+    );
+}
+
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
     return res
@@ -958,7 +968,13 @@ app.use((error, _req, res, _next) => {
       .json({ error: "Payment proof upload is invalid or exceeds the configured size limit." });
   }
   if (nodeEnvironment === "production") {
-    console.error("API request failed.");
+    const errorId = crypto.randomUUID();
+    console.error("API request failed.", {
+      errorId,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorCode: error?.code || "UNKNOWN",
+      errorMessage: safeErrorMessage(error),
+    });
     return res.status(500).json({ error: "Internal server error." });
   }
   console.error(error instanceof Error ? error.message : "Unknown API error.");
