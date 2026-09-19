@@ -1,0 +1,1380 @@
+import { Link, useNavigate } from "@tanstack/react-router";
+import {
+  ArrowRight,
+  BarChart3,
+  Check,
+  ChevronDown,
+  CircleHelp,
+  Clock3,
+  Headphones,
+  LockKeyhole,
+  Mail,
+  MapPin,
+  Menu,
+  MessageCircle,
+  ShieldCheck,
+  TrendingUp,
+  Wallet,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { brokers, challengePlans, faqs, instantPlans, reviews, type Plan } from "@/lib/qxt-data";
+import {
+  getCurrentUser,
+  loginUser,
+  logoutUser,
+  registerUser,
+  updateAccountSettings,
+} from "@/lib/backend";
+import type { LegalDocument } from "@/lib/qxt-legal-data";
+
+const nav = [
+  ["Accounts", "/accounts"],
+  ["Brokers", "/brokers"],
+  ["How It Works", "/how-it-works"],
+  ["FAQ", "/faq"],
+  ["Reviews", "/reviews"],
+  ["Support", "/support"],
+] as const;
+
+function getUserInitials(name?: string | null) {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  const first = parts[0]?.[0]?.toUpperCase() || "";
+  const last = parts.length > 1 ? parts[parts.length - 1]?.[0]?.toUpperCase() || "" : first;
+  return `${first}${last}`.slice(0, 2);
+}
+
+export function Logo() {
+  return (
+    <Link to="/" className="flex shrink-0 items-center gap-2 font-semibold text-foreground">
+      <span className="grid size-8 place-items-center rounded-md border border-gold/30 bg-gold/10 text-gold">
+        <TrendingUp size={17} />
+      </span>
+      <span>
+        <b className="text-gold">QXT</b> Funded
+      </span>
+    </Link>
+  );
+}
+
+export function Header() {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [user, setUser] = useState<{ name: string } | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getCurrentUser().then((currentUser) => {
+      if (active) setUser(currentUser);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      const wrapper = document.getElementById("profile-menu-wrapper");
+      if (wrapper && !wrapper.contains(target)) setProfileOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [profileOpen]);
+
+  const initials = getUserInitials(user?.name);
+
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } finally {
+      setUser(null);
+      setProfileOpen(false);
+      navigate({ to: "/login" });
+    }
+  };
+
+  return (
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
+      <div className="container-x grid h-16 grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[auto_1fr_auto]">
+        <Logo />
+        <nav className="hidden items-center justify-center gap-8 lg:flex">
+          {nav.map(([label, to]) => (
+            <Link
+              key={to}
+              to={to}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              activeProps={{ className: "text-gold" }}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+        <div className="hidden items-center gap-5 lg:flex">
+          {user ? (
+            <div id="profile-menu-wrapper" className="relative">
+              <button
+                type="button"
+                onClick={() => setProfileOpen((value) => !value)}
+                className="flex items-center gap-3 rounded-full border border-border bg-surface px-2 py-1.5 text-sm text-foreground hover:border-gold/40"
+              >
+                <span className="grid size-8 place-items-center rounded-full bg-gold/10 text-[10px] font-bold text-gold">
+                  {initials}
+                </span>
+                <span>{user.name}</span>
+              </button>
+              {profileOpen && (
+                <div className="absolute right-0 top-full z-50 mt-2 w-52 overflow-hidden rounded-xl border border-border bg-surface-elevated shadow-2xl">
+                  <Link
+                    to="/account-settings"
+                    onClick={() => setProfileOpen(false)}
+                    className="block px-4 py-3 text-sm text-foreground hover:bg-muted"
+                  >
+                    Account settings
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="block w-full border-t border-border px-4 py-3 text-left text-sm text-foreground hover:bg-muted"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Link to="/login" className="text-sm text-muted-foreground hover:text-foreground">
+              Sign In
+            </Link>
+          )}
+          <GoldLink to="/accounts">Get Funded</GoldLink>
+        </div>
+        <button
+          aria-label="Open menu"
+          className="grid size-10 place-items-center text-foreground lg:hidden"
+          onClick={() => setOpen(!open)}
+        >
+          {open ? <X /> : <Menu />}
+        </button>
+      </div>
+      {open && (
+        <div className="border-t border-border bg-background px-5 py-5 lg:hidden">
+          <nav className="flex flex-col gap-1">
+            {nav.map(([label, to]) => (
+              <Link
+                key={to}
+                to={to}
+                onClick={() => setOpen(false)}
+                className="rounded-md px-3 py-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {label}
+              </Link>
+            ))}
+            <div className="mt-3 grid gap-3">
+              {user ? (
+                <div className="grid gap-2">
+                  <Link
+                    to="/dashboard"
+                    onClick={() => setOpen(false)}
+                    className="flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-3 text-sm text-foreground"
+                  >
+                    <span className="grid size-8 place-items-center rounded-full bg-gold/10 text-[10px] font-bold text-gold">
+                      {initials}
+                    </span>
+                    <span>{user.name}</span>
+                  </Link>
+                  <Link
+                    to="/account-settings"
+                    onClick={() => setOpen(false)}
+                    className="rounded-md border border-border bg-surface px-3 py-3 text-sm text-foreground"
+                  >
+                    Account settings
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      void handleLogout();
+                    }}
+                    className="rounded-md border border-border bg-surface px-3 py-3 text-left text-sm text-foreground"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <Link to="/login" onClick={() => setOpen(false)} className="btn-secondary">
+                  Sign In
+                </Link>
+              )}
+              <Link to="/accounts" onClick={() => setOpen(false)} className="btn-gold">
+                Get Funded
+              </Link>
+            </div>
+          </nav>
+        </div>
+      )}
+    </header>
+  );
+}
+
+type SitePath =
+  | "/"
+  | "/accounts"
+  | "/brokers"
+  | "/how-it-works"
+  | "/faq"
+  | "/reviews"
+  | "/support"
+  | "/contact"
+  | "/login"
+  | "/checkout"
+  | "/dashboard"
+  | "/account-settings"
+  | "/legal/terms"
+  | "/legal/privacy"
+  | "/legal/refund"
+  | "/legal/risk"
+  | "/legal/cookies";
+export function GoldLink({
+  to,
+  children,
+  search,
+}: {
+  to: SitePath;
+  children: ReactNode;
+  search?: { plan: string };
+}) {
+  if (to === "/checkout" && search)
+    return (
+      <Link to="/checkout" search={search} className="btn-gold">
+        {children}
+        <ArrowRight size={15} />
+      </Link>
+    );
+  return (
+    <Link to={to} className="btn-gold">
+      {children}
+      <ArrowRight size={15} />
+    </Link>
+  );
+}
+
+export function Layout({ children, minimal = false }: { children: ReactNode; minimal?: boolean }) {
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      {!minimal && <Header />}
+      <main className={minimal ? "" : "pt-16"}>{children}</main>
+      {!minimal && <Footer />}
+      {!minimal && <CookieBanner />}
+      {!minimal && <ChatWidget />}
+    </div>
+  );
+}
+
+export function Footer() {
+  const legal = [
+    ["Terms", "/legal/terms"],
+    ["Privacy", "/legal/privacy"],
+    ["Refunds", "/legal/refund"],
+    ["Risk Disclosure", "/legal/risk"],
+    ["Cookies", "/legal/cookies"],
+  ] as const;
+  return (
+    <footer className="border-t border-border bg-surface py-14">
+      <div className="container-x grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
+        <div>
+          <Logo />
+          <p className="mt-4 max-w-sm text-sm leading-6 text-muted-foreground">
+            Built for disciplined traders. Clear rules, trusted platforms, and up to 92% of the
+            profits you generate.
+          </p>
+        </div>
+        <div>
+          <p className="eyebrow">Explore</p>
+          <div className="mt-4 grid gap-3 text-sm">
+            {nav.slice(0, 4).map(([l, t]) => (
+              <Link key={t} to={t} className="text-muted-foreground hover:text-gold">
+                {l}
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="eyebrow">Support</p>
+          <div className="mt-4 grid gap-3 text-sm">
+            <Link to="/support" className="text-muted-foreground hover:text-gold">
+              Support Center
+            </Link>
+            <Link to="/contact" className="text-muted-foreground hover:text-gold">
+              Contact Us
+            </Link>
+            <a
+              href="mailto:support@qxtfunded.org"
+              className="text-muted-foreground hover:text-gold"
+            >
+              support@qxtfunded.org
+            </a>
+            <p className="text-muted-foreground">Available 24/7</p>
+          </div>
+        </div>
+        <div>
+          <p className="eyebrow">Legal</p>
+          <div className="mt-4 grid gap-3 text-sm">
+            {legal.map(([l, t]) => (
+              <Link key={t} to={t} className="text-muted-foreground hover:text-gold">
+                {l}
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="container-x mt-12 flex flex-col gap-3 border-t border-border pt-6 text-xs text-muted-foreground sm:flex-row sm:justify-between">
+        <span>© 2026 QXT Funded. All rights reserved.</span>
+        <span>Trading involves risk. Simulated environments only.</span>
+      </div>
+    </footer>
+  );
+}
+
+function CookieBanner() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    setShow(localStorage.getItem("qxt-cookie") === null);
+  }, []);
+  if (!show) return null;
+  const close = (v: string) => {
+    localStorage.setItem("qxt-cookie", v);
+    setShow(false);
+  };
+  return (
+    <div className="fixed bottom-5 left-1/2 z-50 w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 rounded-lg border border-border bg-surface-elevated p-4 shadow-2xl">
+      <div className="grid gap-4 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+        <span className="grid size-9 place-items-center rounded-md border border-gold/30 bg-gold/10 text-gold">
+          <CookieIcon />
+        </span>
+        <p className="text-xs leading-5 text-muted-foreground">
+          We use functional cookies to safeguard your trader dashboard, maintain active evaluation
+          sessions, and secure payments.{" "}
+          <Link to="/legal/cookies" className="text-gold">
+            Learn more in our Cookies Policy.
+          </Link>
+        </p>
+        <div className="flex gap-2">
+          <button className="btn-small-secondary" onClick={() => close("essential")}>
+            Essential Only
+          </button>
+          <button className="btn-small-gold" onClick={() => close("all")}>
+            Accept All
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function CookieIcon() {
+  return <span className="text-base">◔</span>;
+}
+function ChatWidget() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(!open)}
+        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-gold/40 bg-surface-elevated px-4 py-3 text-xs font-semibold shadow-xl"
+      >
+        <MessageCircle size={16} className="text-gold" />
+        <span>24/7 Live Chat</span>
+      </button>
+      {open && (
+        <div className="fixed bottom-20 right-5 z-40 w-[calc(100%-2.5rem)] max-w-sm rounded-lg border border-border bg-surface-elevated p-5 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <b>QXT Support</b>
+            <button aria-label="Close chat" onClick={() => setOpen(false)}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="my-5 rounded-md bg-muted p-3 text-sm text-muted-foreground">
+            Hi! How can we help you today?
+          </div>
+          <div className="flex gap-2">
+            <input className="field" placeholder="Type a message…" />
+            <button className="icon-gold" aria-label="Send message">
+              <ArrowRight size={17} />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function SectionHead({
+  eyebrow,
+  title,
+  copy,
+  center = false,
+  level = "h2",
+}: {
+  eyebrow: string;
+  title: string;
+  copy?: string;
+  center?: boolean;
+  level?: "h1" | "h2";
+}) {
+  const Heading = level;
+  return (
+    <div className={center ? "mx-auto max-w-2xl text-center" : "max-w-2xl"}>
+      <p className="eyebrow">{eyebrow}</p>
+      <Heading className="section-title">{title}</Heading>
+      {copy && <p className="section-copy">{copy}</p>}
+    </div>
+  );
+}
+
+export function HomePage() {
+  return (
+    <Layout>
+      <section className="hero-grid relative overflow-hidden">
+        <div className="hero-line" />
+        <div className="container-x relative flex min-h-[650px] items-center py-20">
+          <div className="max-w-2xl">
+            <div className="status-pill">
+              <span />
+              Live evaluations open · 5 broker environments
+            </div>
+            <h1 className="hero-title">
+              Prove your edge.
+              <br />
+              <em>Get funded.</em>
+            </h1>
+            <p className="mt-5 max-w-xl text-base leading-7 text-muted-foreground">
+              QXT Funded gives skilled traders access to capital up to $50,000. Start with an
+              Instant account or prove yourself through a simulated evaluation — then keep up to 92%
+              of the profits you generate.
+            </p>
+            <div className="mt-7 flex flex-wrap gap-4">
+              <GoldLink to="/accounts">Start Trading</GoldLink>
+              <Link to="/how-it-works" className="btn-ghost">
+                How It Works <ArrowRight size={15} />
+              </Link>
+            </div>
+            <div className="mt-12 grid grid-cols-2 gap-6 border-t border-border pt-7 sm:grid-cols-4">
+              {[
+                ["$50K", "Max Funding"],
+                ["92%", "Profit Split"],
+                ["5", "Broker Options"],
+                ["24/7", "Support"],
+              ].map(([v, l]) => (
+                <div key={l}>
+                  <b className="font-mono text-2xl text-gold">{v}</b>
+                  <p className="mt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+                    {l}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+      <Benefits />
+      <section className="section">
+        <div className="container-x">
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
+            <SectionHead
+              eyebrow="Account Types"
+              title="Choose your trading account"
+              copy="Instant accounts for direct trading, or Challenge accounts with a lower entry cost."
+            />
+            <Link to="/accounts" className="text-link">
+              View all accounts <ArrowRight size={15} />
+            </Link>
+          </div>
+          <PlanGrid plans={instantPlans.slice(0, 4)} />
+        </div>
+      </section>
+      <BrokersStrip />
+      <ReviewsSection />
+      <FaqSection limit={4} />
+      <Cta />
+    </Layout>
+  );
+}
+
+function Benefits() {
+  const items = [
+    [
+      TrendingUp,
+      "Up to 92% split",
+      "Among the highest profit splits in the industry, paid on a recurring cycle.",
+    ],
+    [
+      Clock3,
+      "Instant or evaluation",
+      "Skip the wait with an Instant account, or take the lower-cost Challenge path.",
+    ],
+    [
+      ShieldCheck,
+      "Transparent rules",
+      "Every limit — daily loss, drawdown, profit target — is stated upfront.",
+    ],
+    [
+      Headphones,
+      "24/7 support",
+      "A support team and ticketing system that responds, day or night.",
+    ],
+  ] as const;
+  return (
+    <section className="section border-y border-border bg-surface">
+      <div className="container-x">
+        <SectionHead
+          eyebrow="Why traders choose us"
+          title="Built for traders who take this seriously"
+        />
+        <div className="mt-10 grid gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-2 lg:grid-cols-4">
+          {items.map(([I, t, c]) => (
+            <article key={t} className="bg-surface p-7">
+              <I className="text-gold" />
+              <h3 className="mt-7 text-lg font-semibold">{t}</h3>
+              <p className="mt-3 text-sm leading-6 text-muted-foreground">{c}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function PlanGrid({ plans }: { plans: Plan[] }) {
+  return (
+    <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {plans.map((p) => (
+        <article key={p.id} className={`plan-card ${p.popular ? "popular" : ""}`}>
+          {p.popular && <span className="popular-tag">Popular</span>}
+          <p className="eyebrow">{p.type === "Instant" ? "Direct Funding" : "Evaluation"}</p>
+          <h3 className="mt-4 font-mono text-4xl font-bold">{p.size}</h3>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Account size · <b className="text-foreground">${p.price}</b> one-time
+          </p>
+          <dl className="my-7 grid gap-3 border-y border-border py-5 text-sm">
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">Daily Loss Limit</dt>
+              <dd>{p.dailyLoss}</dd>
+            </div>
+            {p.target && (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Profit Target</dt>
+                <dd>{p.target}</dd>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">Profit Split</dt>
+              <dd className="text-gold">92%</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">Funding Type</dt>
+              <dd>{p.type}</dd>
+            </div>
+          </dl>
+          <GoldLink to="/checkout" search={{ plan: p.id }}>
+            Get Funded
+          </GoldLink>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function BrokersStrip() {
+  return (
+    <section className="section bg-surface">
+      <div className="container-x">
+        <SectionHead eyebrow="Trading Environments" title="Trade on platforms you already know" />
+        <div className="mt-9 grid grid-cols-2 gap-3 md:grid-cols-5">
+          {brokers.map((b) => (
+            <div className="broker-tile" key={b.name}>
+              <img src={b.image} alt="" />
+              <b>{b.name}</b>
+              <span>
+                <i />
+                Active
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+function ReviewsSection() {
+  return (
+    <section className="section">
+      <div className="container-x">
+        <div className="grid gap-10 lg:grid-cols-[280px_1fr]">
+          <div>
+            <p className="eyebrow">Trustpilot</p>
+            <h2 className="section-title">What our traders say</h2>
+            <div className="mt-6 flex items-end gap-3">
+              <b className="text-5xl">4.8</b>
+              <span className="pb-1 text-sm text-muted-foreground">from 2,400+ reviews</span>
+            </div>
+            <div className="mt-3 text-xl text-gold">★★★★★</div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {reviews.map((r) => (
+              <ReviewCard key={r.name} {...r} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+function ReviewCard({
+  quote,
+  initials,
+  name,
+  country,
+}: {
+  quote: string;
+  initials: string;
+  name: string;
+  country: string;
+}) {
+  return (
+    <article className="review-card">
+      <div className="text-gold">★★★★★</div>
+      <p className="mt-5 leading-7">“{quote}”</p>
+      <div className="mt-7 flex items-center gap-3">
+        <span className="avatar">{initials}</span>
+        <div>
+          <b className="text-sm">{name}</b>
+          <p className="text-xs text-muted-foreground">{country}</p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export function FaqSection({ limit }: { limit?: number }) {
+  const list = limit ? faqs.slice(0, limit) : faqs;
+  return (
+    <section className="section bg-surface">
+      <div className="container-x">
+        <SectionHead eyebrow="Questions" title="Frequently asked questions" />
+        <div className="mt-9 max-w-4xl divide-y divide-border border-y border-border">
+          {list.map((f, i) => (
+            <FaqRow key={f.q} {...f} start={i === 0} />
+          ))}
+        </div>
+        {limit && (
+          <Link to="/faq" className="text-link mt-7">
+            View all FAQs <ArrowRight size={15} />
+          </Link>
+        )}
+      </div>
+    </section>
+  );
+}
+function FaqRow({ q, a, start = false }: { q: string; a: string; start?: boolean }) {
+  const [open, setOpen] = useState(start);
+  return (
+    <div>
+      <button
+        className="grid w-full grid-cols-[1fr_auto] items-center gap-5 py-6 text-left font-medium"
+        onClick={() => setOpen(!open)}
+      >
+        <span>{q}</span>
+        <ChevronDown
+          size={18}
+          className={`text-gold transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && <p className="max-w-3xl pb-6 text-sm leading-7 text-muted-foreground">{a}</p>}
+    </div>
+  );
+}
+function Cta() {
+  return (
+    <section className="section gold-grid">
+      <div className="container-x text-center">
+        <h2 className="section-title mx-auto max-w-2xl">Ready to trade with real backing?</h2>
+        <p className="section-copy mx-auto max-w-xl">
+          Choose your account size and get started in minutes. Your dashboard, orders, and payouts
+          are all in one place.
+        </p>
+        <div className="mt-7 flex justify-center gap-3">
+          <GoldLink to="/accounts">Get Funded</GoldLink>
+          <Link to="/faq" className="btn-secondary">
+            Read the FAQ
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function StandardHero({
+  eyebrow,
+  title,
+  copy,
+}: {
+  eyebrow: string;
+  title: string;
+  copy: string;
+}) {
+  return (
+    <section className="page-hero hero-grid">
+      <div className="container-x">
+        <SectionHead eyebrow={eyebrow} title={title} copy={copy} level="h1" />
+      </div>
+    </section>
+  );
+}
+export function AccountsPage() {
+  const [tab, setTab] = useState<"instant" | "challenge">("instant");
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="Account Types"
+        title="Choose your trading account"
+        copy="Instant accounts for direct trading, or Challenge accounts with a lower entry cost that unlock funding once you clear the evaluation."
+      />
+      <section className="section pt-0">
+        <div className="container-x">
+          <div className="segmented">
+            <button onClick={() => setTab("instant")} className={tab === "instant" ? "active" : ""}>
+              Instant Accounts
+            </button>
+            <button
+              onClick={() => setTab("challenge")}
+              className={tab === "challenge" ? "active" : ""}
+            >
+              Challenge Accounts
+            </button>
+          </div>
+          <PlanGrid plans={tab === "instant" ? instantPlans : challengePlans} />
+          <p className="mt-8 text-xs leading-6 text-muted-foreground">
+            All accounts run on simulated evaluation environments. Profit splits are paid from firm
+            capital once an account reaches funded status.
+          </p>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+export function BrokersPage() {
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="Trading Environments"
+        title="Trade on the platforms you know"
+        copy="Every account gives you a choice of broker environment. Pick the one that matches how you already trade."
+      />
+      <section className="section pt-0">
+        <div className="container-x grid gap-4 md:grid-cols-2">
+          {brokers.map((b) => (
+            <article key={b.name} className="broker-card">
+              <div className="flex items-center justify-between">
+                <img src={b.image} alt="" />
+                <span className="active-badge">
+                  <i />
+                  Active
+                </span>
+              </div>
+              <h3 className="mt-8 text-2xl font-semibold">{b.name}</h3>
+              <p className="mt-2 text-muted-foreground">{b.copy}</p>
+              <Link to="/accounts" className="text-link mt-6">
+                Choose this platform <ArrowRight size={15} />
+              </Link>
+            </article>
+          ))}
+        </div>
+      </section>
+    </Layout>
+  );
+}
+export function HowPage() {
+  const steps = [
+    [
+      "01",
+      "Choose your account",
+      "Pick an Instant account to start trading right away, or a Challenge account with a lower entry cost.",
+    ],
+    [
+      "02",
+      "Complete the evaluation",
+      "Trade within the daily loss and drawdown limits. Hit the profit target and move to the next stage.",
+    ],
+    [
+      "03",
+      "Verification",
+      "We confirm your trading history against the account rules. Most verifications complete within one business day.",
+    ],
+    [
+      "04",
+      "Get funded",
+      "Receive your funded account and start earning your profit split — up to 92% — on every payout cycle.",
+    ],
+  ];
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="The Path to Funding"
+        title="From account purchase to funded trader"
+        copy="A transparent route from selecting an account to earning on funded capital."
+      />
+      <section className="section pt-0">
+        <div className="container-x max-w-4xl">
+          {steps.map(([n, t, c]) => (
+            <div className="step-row" key={n}>
+              <b>{n}</b>
+              <div>
+                <h3>{t}</h3>
+                <p>{c}</p>
+              </div>
+            </div>
+          ))}
+          <div className="mt-10">
+            <GoldLink to="/accounts">Start with an account</GoldLink>
+          </div>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+export function FaqPage() {
+  const [cat, setCat] = useState("All");
+  const cats = ["All", "Accounts", "Challenge", "Risk Rules", "Brokers", "Payouts"];
+  const filtered = cat === "All" ? faqs : faqs.filter((f) => f.cat === cat);
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="Support"
+        title="Frequently asked questions"
+        copy="Find immediate answers about accounts, rules, and payouts."
+      />
+      <section className="section pt-0">
+        <div className="container-x">
+          <div className="flex flex-wrap gap-2">
+            {cats.map((c) => (
+              <button
+                key={c}
+                onClick={() => setCat(c)}
+                className={`filter-chip ${cat === c ? "active" : ""}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <div className="mt-7 max-w-4xl divide-y divide-border border-y border-border">
+            {filtered.map((f) => (
+              <FaqRow key={f.q} {...f} />
+            ))}
+          </div>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+export function ReviewsPage() {
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="Trustpilot"
+        title="What our traders say"
+        copy="Verified experiences from traders using QXT Funded across the world."
+      />
+      <section className="section pt-0">
+        <div className="container-x">
+          <div className="mb-9 flex items-center gap-4">
+            <b className="text-5xl">4.8</b>
+            <div>
+              <div className="text-gold">★★★★★</div>
+              <p className="text-sm text-muted-foreground">from 2,400+ reviews</p>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {[...reviews, ...reviews].map((r, i) => (
+              <ReviewCard key={i} {...r} />
+            ))}
+          </div>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+
+export function SupportPage() {
+  const [sent, setSent] = useState(false);
+  const options: { Icon: LucideIcon; title: string; copy: string }[] = [
+    {
+      Icon: MessageCircle,
+      title: "Live Chat",
+      copy: "Connect instantly with our support team in real-time 24/7.",
+    },
+    {
+      Icon: Mail,
+      title: "Open a Ticket",
+      copy: "Create a support ticket for account, billing, or technical issues.",
+    },
+    {
+      Icon: CircleHelp,
+      title: "Browse the FAQ",
+      copy: "Most questions about accounts, rules, and payouts are answered.",
+    },
+  ];
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="We're here to help"
+        title="Support Center"
+        copy="Search the FAQ, start a live chat session, browse your tickets, or reach out directly — our team responds 24/7."
+      />
+      <section className="section pt-0">
+        <div className="container-x grid gap-4 md:grid-cols-3">
+          {options.map(({ Icon, title, copy }) => (
+            <article className="support-card" key={title}>
+              <Icon className="text-gold" />
+              <h3>{title}</h3>
+              <p>{copy}</p>
+            </article>
+          ))}
+        </div>
+        <div className="mx-auto mt-14 max-w-2xl">
+          <h2 className="text-2xl font-semibold">Send us a message</h2>
+          {sent ? (
+            <div className="success-box mt-6">
+              <Check />
+              Your message has been received. We’ll reply shortly.
+            </div>
+          ) : (
+            <form
+              className="mt-6 grid gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setSent(true);
+              }}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label>
+                  Name
+                  <input className="field mt-2" required />
+                </label>
+                <label>
+                  Email
+                  <input className="field mt-2" type="email" required />
+                </label>
+              </div>
+              <label>
+                Topic
+                <select className="field mt-2">
+                  <option>Account question</option>
+                  <option>Billing</option>
+                  <option>Technical issue</option>
+                </select>
+              </label>
+              <label>
+                Message
+                <textarea className="field mt-2 min-h-32" required />
+              </label>
+              <button className="btn-gold w-fit" type="submit">
+                Send Message <ArrowRight size={15} />
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+    </Layout>
+  );
+}
+
+export function ContactPage() {
+  const [sent, setSent] = useState(false);
+  return (
+    <Layout>
+      <StandardHero
+        eyebrow="Get in touch"
+        title="Contact Us"
+        copy="Questions before you sign up? Send us a message and we'll get back to you within a day."
+      />
+      <section className="section pt-0">
+        <div className="container-x grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="contact-panel">
+            <h2 className="text-2xl font-semibold">Send a message</h2>
+            {sent ? (
+              <div className="success-box mt-7">
+                <Check />
+                Thanks for reaching out. We’ll get back to you within one day.
+              </div>
+            ) : (
+              <form
+                className="mt-7 grid gap-5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setSent(true);
+                }}
+              >
+                <label>
+                  Full Name
+                  <input className="field mt-2" required autoComplete="name" />
+                </label>
+                <label>
+                  Email
+                  <input className="field mt-2" type="email" required autoComplete="email" />
+                </label>
+                <label>
+                  Message
+                  <textarea className="field mt-2 min-h-40" required />
+                </label>
+                <button className="btn-gold w-fit" type="submit">
+                  Send Message <ArrowRight size={15} />
+                </button>
+              </form>
+            )}
+          </div>
+          <aside className="grid content-start gap-4">
+            <div className="contact-detail">
+              <Mail />
+              <div>
+                <p>Email</p>
+                <a href="mailto:support@qxtfunded.org">support@qxtfunded.org</a>
+              </div>
+            </div>
+            <div className="contact-detail">
+              <Clock3 />
+              <div>
+                <p>Response time</p>
+                <b>Within one day</b>
+              </div>
+            </div>
+            <div className="contact-detail">
+              <MapPin />
+              <div>
+                <p>Availability</p>
+                <b>Online worldwide · 24/7</b>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+
+export function LegalPage({ document }: { document: LegalDocument }) {
+  return (
+    <Layout>
+      <section className="page-hero hero-grid">
+        <div className="container-x">
+          <p className="eyebrow">Legal</p>
+          <h1 className="section-title max-w-3xl">{document.title}</h1>
+          <p className="mt-4 text-sm text-muted-foreground">Last updated: {document.updated}</p>
+        </div>
+      </section>
+      <section className="section pt-0">
+        <article className="legal-document container-x">
+          {document.sections.map((section) => (
+            <section key={section.title}>
+              <h2>{section.title}</h2>
+              {section.paragraphs?.map((paragraph) => (
+                <p key={paragraph}>{paragraph}</p>
+              ))}
+              {section.bullets && (
+                <ul>
+                  {section.bullets.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </article>
+      </section>
+    </Layout>
+  );
+}
+
+export function LoginPage() {
+  const navigate = useNavigate();
+  const inFlight = useRef(false);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setError("");
+    const data = new FormData(e.currentTarget);
+    try {
+      await (mode === "login"
+        ? loginUser({
+            email: String(data.get("email") || ""),
+            password: String(data.get("password") || ""),
+          })
+        : registerUser({
+            name: [
+              String(data.get("firstName") || "").trim(),
+              String(data.get("lastName") || "").trim(),
+            ]
+              .filter(Boolean)
+              .join(" "),
+            email: String(data.get("email") || ""),
+            password: String(data.get("password") || ""),
+          }));
+      if (!(await getCurrentUser()))
+        throw new Error("Unable to establish your session. Please try again.");
+      const redirect = new URLSearchParams(
+        typeof window !== "undefined" ? window.location.search : "",
+      ).get("redirect");
+      const destination = redirect || "/dashboard";
+      if (destination.startsWith("/checkout/broker")) {
+        const plan =
+          new URL(destination, "http://local").searchParams.get("plan") || "instant-3000";
+        navigate({ to: "/checkout/broker", search: { plan } });
+      } else navigate({ to: "/dashboard" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to authenticate.");
+      inFlight.current = false;
+      setSubmitting(false);
+    }
+  };
+  return (
+    <Layout minimal>
+      <div className="auth-page">
+        <div className="auth-form">
+          <Logo />
+          <div className="mt-16">
+            <p className="eyebrow">Trader portal</p>
+            <h1 className="mt-3 text-4xl font-semibold">
+              {mode === "login" ? "Welcome back" : "Create your account"}
+            </h1>
+            <p className="mt-3 text-muted-foreground">
+              Sign in to access your dashboard and orders.
+            </p>
+          </div>
+          <form onSubmit={submit} className="mt-9 grid gap-5">
+            {mode === "register" && (
+              <div className="grid gap-5 sm:grid-cols-2">
+                <label>
+                  First name
+                  <input name="firstName" required className="field mt-2" placeholder="John" />
+                </label>
+                <label>
+                  Last name
+                  <input name="lastName" required className="field mt-2" placeholder="Smith" />
+                </label>
+              </div>
+            )}
+            <label>
+              Email
+              <input
+                name="email"
+                required
+                type="email"
+                className="field mt-2"
+                placeholder="trader@example.com"
+              />
+            </label>
+            <label>
+              Password
+              <input
+                name="password"
+                required
+                minLength={8}
+                type="password"
+                className="field mt-2"
+                placeholder="At least 8 characters"
+              />
+            </label>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <button className="btn-gold justify-center" type="submit" disabled={submitting}>
+              {submitting
+                ? mode === "register"
+                  ? "Creating account..."
+                  : "Signing in..."
+                : mode === "login"
+                  ? "Sign In"
+                  : "Create Account"}{" "}
+              {!submitting && <ArrowRight size={15} />}
+            </button>
+          </form>
+          <button
+            type="button"
+            className="mt-7 text-sm text-gold"
+            onClick={() => {
+              setMode(mode === "login" ? "register" : "login");
+              setError("");
+            }}
+          >
+            {mode === "login" ? "Create an account" : "Already have an account? Sign in"}
+          </button>
+        </div>
+        <aside className="auth-aside">
+          <blockquote>
+            “The clearest rules and the fastest payouts of any firm I’ve traded with.”
+          </blockquote>
+          <p>Sarah P. — Funded Trader, UK</p>
+          <div className="mt-12 grid gap-4">
+            {["Instant setup", "Transparent rules", "92% split"].map((x) => (
+              <span key={x}>
+                <Check size={16} />
+                {x}
+              </span>
+            ))}
+          </div>
+        </aside>
+      </div>
+    </Layout>
+  );
+}
+
+export function CheckoutPage() {
+  const planId =
+    new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("plan") ||
+    "instant-3000";
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const next = `/checkout/broker?plan=${encodeURIComponent(planId)}`;
+  const navigate = useNavigate();
+  useEffect(() => {
+    getCurrentUser().then((user) => setIsAuthenticated(Boolean(user)));
+  }, []);
+  useEffect(() => {
+    if (isAuthenticated === null) return;
+    if (isAuthenticated) navigate({ to: "/checkout/broker", search: { plan: planId } });
+    else navigate({ to: "/login", search: { redirect: next } });
+  }, [isAuthenticated, navigate, next, planId]);
+  return (
+    <Layout>
+      <section className="section">
+        <div className="container-x max-w-xl">
+          <p className="eyebrow">Secure checkout</p>
+          <h1 className="mt-4 text-4xl font-semibold">Continue to checkout</h1>
+          <p className="mt-3 text-muted-foreground">
+            {isAuthenticated
+              ? "Continue to broker selection."
+              : "Login or create an account before selecting your broker."}
+          </p>
+          <Link
+            to={isAuthenticated ? "/checkout/broker" : "/login"}
+            search={isAuthenticated ? { plan: planId } : { redirect: next }}
+            className="btn-gold mt-7"
+          >
+            {isAuthenticated ? "Continue" : "Login / Sign Up"} <ArrowRight size={15} />
+          </Link>
+        </div>
+      </section>
+    </Layout>
+  );
+}
+function CheckoutForm() {
+  return null;
+}
+
+export function DashboardPage() {
+  const [period, setPeriod] = useState("7D");
+  const metrics: { Icon: LucideIcon; label: string; value: string }[] = [
+    { Icon: Wallet, label: "Balance", value: "$20,842.50" },
+    { Icon: TrendingUp, label: "Net profit", value: "+$842.50" },
+    { Icon: BarChart3, label: "Profit target", value: "$2,000" },
+    { Icon: ShieldCheck, label: "Daily drawdown", value: "$186 / $4,667" },
+  ];
+  const points =
+    period === "7D"
+      ? "12,42 62,30 112,48 160,39 210,84 262,70 315,105 365,79 420,120 470,95 525,135"
+      : "12,100 62,79 112,93 160,60 210,110 262,88 315,124 365,106 420,145 470,125 525,155";
+  return (
+    <Layout>
+      <section className="section">
+        <div className="container-x">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+            <div className="min-w-0">
+              <p className="eyebrow">Trader dashboard</p>
+              <h1 className="truncate text-3xl font-semibold">Welcome back, Alex</h1>
+            </div>
+            <span className="active-badge">
+              <i />
+              Account active
+            </span>
+          </div>
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {metrics.map(({ Icon, label, value }) => (
+              <div className="metric-card" key={label}>
+                <Icon className="text-gold" size={20} />
+                <p>{label}</p>
+                <b>{value}</b>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_340px]">
+            <div className="chart-card">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Equity curve</p>
+                  <b className="mt-1 block text-xl">$20,842.50</b>
+                </div>
+                <div className="segmented compact">
+                  {["7D", "30D"].map((x) => (
+                    <button
+                      className={period === x ? "active" : ""}
+                      onClick={() => setPeriod(x)}
+                      key={x}
+                    >
+                      {x}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <svg
+                viewBox="0 0 540 180"
+                className="mt-8 w-full overflow-visible"
+                aria-label="Equity chart"
+              >
+                <defs>
+                  <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop stopColor="var(--gold)" stopOpacity=".3" />
+                    <stop offset="1" stopColor="var(--gold)" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
+                <path d={`M${points} L525,175 L12,175Z`} fill="url(#chartFill)" />
+                <polyline points={points} fill="none" stroke="var(--gold)" strokeWidth="3" />
+              </svg>
+            </div>
+            <div className="chart-card">
+              <p className="text-sm text-muted-foreground">Current account</p>
+              <b className="mt-2 block text-3xl">$20,000</b>
+              <p className="mt-1 text-sm text-gold">Instant Funding</p>
+              <div className="mt-7 grid gap-4 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Platform</span>
+                  <span>Quotex</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Profit split</span>
+                  <span>92%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trading days</span>
+                  <span>14</span>
+                </div>
+              </div>
+              <button className="btn-secondary mt-8 w-full">Request Payout</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </Layout>
+  );
+}

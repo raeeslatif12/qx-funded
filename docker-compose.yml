@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qxt-funded-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qxt_funded
+      POSTGRES_USER: qxt
+      POSTGRES_PASSWORD: qxt_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - qxt-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  qxt-postgres-data:
