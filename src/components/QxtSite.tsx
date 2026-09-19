@@ -762,7 +762,7 @@ function Benefits() {
 
 export function PlanGrid({ plans, before }: { plans: Plan[]; before?: ReactNode }) {
   return (
-    <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="mt-10 grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
       {before}
       {plans.map((p) => (
         <article key={p.id} className={`plan-card ${p.popular ? "popular" : ""}`}>
