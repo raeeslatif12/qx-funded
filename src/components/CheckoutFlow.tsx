@@ -12,6 +12,7 @@ import QRCode from "qrcode";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth";
+import { getCustomDirectPlan } from "@/lib/qxt-data";
 import {
   approveOrderForAdmin,
   createAdminBroker,
@@ -1135,6 +1136,11 @@ export function AdminDashboardPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
+  const instantPlanFields = (price: string | number) => {
+    const calculated = getCustomDirectPlan(Number(price));
+    return calculated ? { size: calculated.size, dailyLoss: calculated.dailyLoss } : {};
+  };
+
   const loadData = async () => {
     if (!user?.admin) return;
     const [
@@ -1730,9 +1736,14 @@ export function AdminDashboardPage() {
                       Type
                       <select
                         value={newPlan.type}
-                        onChange={(event) =>
-                          setNewPlan((current) => ({ ...current, type: event.target.value }))
-                        }
+                        onChange={(event) => {
+                          const type = event.target.value;
+                          setNewPlan((current) => ({
+                            ...current,
+                            type,
+                            ...(type === "Instant" ? instantPlanFields(current.price) : {}),
+                          }));
+                        }}
                         className="field"
                       >
                         <option>Instant</option>
@@ -1766,9 +1777,14 @@ export function AdminDashboardPage() {
                       <input
                         type="number"
                         value={newPlan.price}
-                        onChange={(event) =>
-                          setNewPlan((current) => ({ ...current, price: event.target.value }))
-                        }
+                        onChange={(event) => {
+                          const price = event.target.value;
+                          setNewPlan((current) => ({
+                            ...current,
+                            price,
+                            ...(current.type === "Instant" ? instantPlanFields(price) : {}),
+                          }));
+                        }}
                         className="field"
                         placeholder="250"
                       />
@@ -1871,15 +1887,22 @@ export function AdminDashboardPage() {
                             Type
                             <select
                               value={plan.type}
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                const type = event.target.value as PlanRecord["type"];
                                 setPlans((current) =>
                                   current.map((entry) =>
                                     entry.id === plan.id
-                                      ? { ...entry, type: event.target.value as any }
+                                      ? {
+                                          ...entry,
+                                          type,
+                                          ...(type === "Instant"
+                                            ? instantPlanFields(entry.price)
+                                            : {}),
+                                        }
                                       : entry,
                                   ),
-                                )
-                              }
+                                );
+                              }}
                               className="field"
                             >
                               <option>Instant</option>
@@ -1907,15 +1930,22 @@ export function AdminDashboardPage() {
                             <input
                               type="number"
                               value={plan.price}
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                const price = Number(event.target.value);
                                 setPlans((current) =>
                                   current.map((entry) =>
                                     entry.id === plan.id
-                                      ? { ...entry, price: Number(event.target.value) }
+                                      ? {
+                                          ...entry,
+                                          price,
+                                          ...(entry.type === "Instant"
+                                            ? instantPlanFields(price)
+                                            : {}),
+                                        }
                                       : entry,
                                   ),
-                                )
-                              }
+                                );
+                              }}
                               className="field"
                             />
                           </label>
