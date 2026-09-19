@@ -7,6 +7,7 @@ import {
   CreditCard,
   Eye,
   EyeOff,
+  ListChecks,
   Pencil,
   Upload,
   WalletCards,
@@ -635,20 +636,53 @@ export function PaymentProofPage() {
   const [order, setOrder] = useState<OrderRecord | null>(null);
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [error, setError] = useState("");
+  const [loadingOrder, setLoadingOrder] = useState(true);
   const navigate = useNavigate();
   useEffect(() => {
-    if (user && orderId)
-      getOrderById(orderId)
-        .then(async (loaded) => {
+    if (!user || !orderId) {
+      setLoadingOrder(false);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const loaded = await getOrderById(orderId);
+          const loadedMethod = await getPaymentMethodById(loaded.paymentMethodId);
+          if (!loadedMethod) throw new Error("The payment method for this order is unavailable.");
+          if (cancelled) return;
           setOrder(loaded);
-          setMethod(await getPaymentMethodById(loaded.paymentMethodId));
-        })
-        .catch((caught) =>
-          setError(caught instanceof Error ? caught.message : "Unable to load order."),
-        );
+          setMethod(loadedMethod);
+          setError("");
+          setLoadingOrder(false);
+          return;
+        } catch (caught) {
+          lastError = caught;
+          if (attempt < 3)
+            await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) {
+        setError(lastError instanceof Error ? lastError.message : "Unable to load order.");
+        setLoadingOrder(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, [orderId, user]);
   if (loading) return <LoadingPage />;
   if (!user) return <AuthRequired next={`/checkout/proof?order=${orderId}`} />;
+  if (loadingOrder)
+    return (
+      <FlowShell
+        eyebrow="Payment proof"
+        title="Loading your order"
+        copy="We are confirming your order details. This usually takes a moment."
+      />
+    );
   if (!order || !method)
     return (
       <FlowShell
@@ -1141,6 +1175,7 @@ export function AdminDashboardPage() {
   const [search, setSearch] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [checkingUser, setCheckingUser] = useState<AdminUser | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [approvalForm, setApprovalForm] = useState({ accountEmail: "", accountPassword: "" });
   const [newPlan, setNewPlan] = useState({
@@ -1254,6 +1289,10 @@ export function AdminDashboardPage() {
         return haystack.includes(search.trim().toLowerCase());
       }),
     [filter, orders, search, userById],
+  );
+  const checkingUserOrders = useMemo(
+    () => (checkingUser ? orders.filter((order) => order.userId === checkingUser.id) : []),
+    [checkingUser, orders],
   );
 
   const handleReject = async () => {
@@ -2720,15 +2759,27 @@ export function AdminDashboardPage() {
                               </td>
                               <td className="px-4 py-3">{entry.admin ? "Admin" : "Customer"}</td>
                               <td className="px-4 py-3 text-right">
-                                <button
-                                  type="button"
-                                  aria-label={`Edit ${entry.name}`}
-                                  title={`Edit ${entry.name}`}
-                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-gold/50 hover:bg-gold/10 hover:text-gold"
-                                  onClick={() => setEditingUser(entry)}
-                                >
-                                  <Pencil size={15} />
-                                </button>
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    aria-label={`Check orders for ${entry.name}`}
+                                    title={`Check orders for ${entry.name}`}
+                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs text-muted-foreground transition-colors hover:border-gold/50 hover:bg-gold/10 hover:text-gold"
+                                    onClick={() => setCheckingUser(entry)}
+                                  >
+                                    <ListChecks size={15} />
+                                    Orders
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label={`Edit ${entry.name}`}
+                                    title={`Edit ${entry.name}`}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-gold/50 hover:bg-gold/10 hover:text-gold"
+                                    onClick={() => setEditingUser(entry)}
+                                  >
+                                    <Pencil size={15} />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -2856,6 +2907,103 @@ export function AdminDashboardPage() {
                   {submitting ? "Saving..." : "Save changes"}
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {checkingUser && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+            onClick={() => setCheckingUser(null)}
+          >
+            <div
+              className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-border bg-surface-elevated p-6 shadow-[0_28px_80px_rgba(0,0,0,0.42)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="eyebrow">Customer activity</p>
+                  <h3 className="mt-2 text-2xl font-semibold text-foreground">
+                    {checkingUser.name}'s orders
+                  </h3>
+                  <p className="mt-1 text-sm text-muted-foreground">{checkingUser.email}</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-small btn-secondary"
+                  onClick={() => setCheckingUser(null)}
+                >
+                  Close
+                </button>
+              </div>
+
+              {checkingUserOrders.length === 0 ? (
+                <div className="mt-6 rounded-2xl border border-border bg-background p-6 text-sm text-muted-foreground">
+                  This user has not placed any orders yet.
+                </div>
+              ) : (
+                <div className="mt-6 grid gap-4">
+                  {checkingUserOrders.map((order) => {
+                    const rejected =
+                      order.orderStatus === "rejected" || order.orderStatus === "payment_rejected";
+                    const approved =
+                      order.orderStatus === "approved" || order.orderStatus === "active";
+                    const statusCopy = rejected
+                      ? "This order was rejected during payment review."
+                      : approved
+                        ? "Payment approved. The funded account is available to the customer."
+                        : "Payment is awaiting admin review and verification.";
+                    return (
+                      <div
+                        key={order.id}
+                        className="rounded-2xl border border-border bg-background p-4"
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <p className="font-mono text-xs text-muted-foreground">#{order.id}</p>
+                            <h4 className="mt-1 text-lg font-semibold text-foreground">
+                              {order.planName}
+                            </h4>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              {order.broker} · {order.paymentMethodName} · ${order.amount}
+                            </p>
+                          </div>
+                          <span
+                            className={`w-fit rounded-full px-2.5 py-1 text-xs ${rejected ? "bg-red-500/10 text-red-300" : approved ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"}`}
+                          >
+                            {statusLabel(order.orderStatus)}
+                          </span>
+                        </div>
+                        <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                          <p>
+                            Ordered:{" "}
+                            <b className="text-foreground">{formatDateTime(order.createdAt)}</b>
+                          </p>
+                          <p>
+                            Updated:{" "}
+                            <b className="text-foreground">{formatDateTime(order.updatedAt)}</b>
+                          </p>
+                          <p>
+                            Payment:{" "}
+                            <b className="text-foreground">{order.paymentStatus || "Pending"}</b>
+                          </p>
+                          <p>
+                            Funded account:{" "}
+                            <b className="text-foreground">
+                              {approved ? "Delivered" : "Not available"}
+                            </b>
+                          </p>
+                        </div>
+                        <p
+                          className={`mt-4 rounded-xl border p-3 text-sm ${rejected ? "border-red-500/30 bg-red-500/5 text-red-200" : approved ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-200" : "border-amber-500/30 bg-amber-500/5 text-amber-100"}`}
+                        >
+                          {order.rejectionReason ? `Reason: ${order.rejectionReason}` : statusCopy}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
