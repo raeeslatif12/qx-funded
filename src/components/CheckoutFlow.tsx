@@ -271,14 +271,22 @@ export function BrokerSelectionPage() {
               type="button"
               key={broker.id}
               onClick={() => setSelected(broker.id)}
+              aria-pressed={selected === broker.id}
               className={`broker-card text-left ${selected === broker.id ? "border-gold ring-1 ring-gold" : ""}`}
             >
               <div className="flex items-center justify-between">
                 <img src={broker.image} alt={broker.name} />
-                <span className="active-badge">
-                  <i />
-                  Available
-                </span>
+                {selected === broker.id ? (
+                  <span className="selection-badge">
+                    <Check size={13} />
+                    Selected
+                  </span>
+                ) : (
+                  <span className="active-badge">
+                    <i />
+                    Available
+                  </span>
+                )}
               </div>
               <h2 className="mt-7 text-xl font-semibold">{broker.name}</h2>
               <p className="mt-2 text-sm text-muted-foreground">{broker.copy}</p>
@@ -376,6 +384,7 @@ export function PaymentMethodSelectionPage() {
               type="button"
               key={method.id}
               onClick={() => setSelected(method.id)}
+              aria-pressed={selected === method.id}
               className={`broker-card text-left ${selected === method.id ? "border-gold ring-1 ring-gold" : ""}`}
             >
               <div className="flex items-center gap-3">
@@ -388,12 +397,14 @@ export function PaymentMethodSelectionPage() {
                     <CreditCard size={22} />
                   )}
                 </span>
-                <div>
+                <div className="min-w-0">
                   <h2 className="font-semibold">{method.name}</h2>
                   <p className="text-xs text-muted-foreground">{method.network}</p>
                 </div>
+                {selected === method.id && (
+                  <Check className="ml-auto shrink-0 text-gold" size={18} />
+                )}
               </div>
-              <p className="mt-6 text-sm text-muted-foreground">Configured by the backend</p>
             </button>
           ))
         )}
@@ -495,7 +506,7 @@ export function PaymentDetailsPage() {
     <FlowShell
       eyebrow="Step 3 of 4"
       title="Complete Your Purchase"
-      copy="Send the exact amount to the configured backend address, then confirm that you have paid."
+      copy="Send the exact amount to the deposit address below, then confirm that you have paid."
     >
       <div className="mt-10 grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="order-card">
@@ -572,7 +583,7 @@ export function PaymentDetailsPage() {
             label={`QR code for ${method.name}`}
           />
           <p className="mt-4 text-center text-xs text-muted-foreground">
-            Generated from the backend deposit address.
+            Scan the address above with your wallet app.
           </p>
         </div>
       </div>
@@ -815,7 +826,7 @@ export function UserOrdersDashboardPage() {
 
                 return (
                   <article key={order.id} className="order-card">
-                    <div className="grid gap-3 md:grid-cols-6 md:items-center">
+                    <div className="grid gap-3 lg:grid-cols-6 lg:items-center">
                       <span className="font-mono text-xs">#{order.id}</span>
                       <span>{order.planName}</span>
                       <span>{order.broker}</span>

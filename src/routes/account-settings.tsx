@@ -93,7 +93,7 @@ function AccountSettingsPage() {
 
           <form
             onSubmit={handleSubmit}
-            className="mt-8 grid gap-5 rounded-xl border border-border bg-surface p-6"
+            className="mt-8 grid gap-5 rounded-md border border-border bg-surface p-6 shadow-sm sm:p-7"
           >
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading your profile…</p>

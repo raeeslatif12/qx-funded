@@ -77,7 +77,7 @@ button {
   margin-inline: auto;
 }
 @utility section {
-  padding-block: 6rem;
+  padding-block: 5rem;
 }
 @utility eyebrow {
   font-size: 0.68rem;
@@ -214,6 +214,14 @@ button {
 .btn-ghost:hover {
   color: var(--foreground);
 }
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
 .field:focus {
   border-color: var(--gold);
   box-shadow: 0 0 0 3px var(--gold-soft);
@@ -348,6 +356,14 @@ label {
   color: oklch(0.76 0.18 150);
   font-size: 0.62rem;
 }
+.selection-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--gold);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
 .review-card {
   padding: 1.5rem;
 }
@@ -400,7 +416,7 @@ label {
   padding: 0.4rem 0.65rem;
 }
 .broker-card {
-  padding: 2rem;
+  padding: 1.5rem;
 }
 .broker-card img {
   width: 52px;
@@ -497,7 +513,7 @@ label {
 }
 .order-card {
   align-self: start;
-  padding: 2rem;
+  padding: 1.5rem;
 }
 .metric-card {
   padding: 1.25rem;
@@ -575,7 +591,7 @@ label {
 
 @media (max-width: 767px) {
   .section {
-    padding-block: 4rem;
+    padding-block: 3.5rem;
   }
   .hero-title {
     font-size: 3rem;
@@ -588,6 +604,13 @@ label {
   }
   .page-hero {
     padding-block: 5rem 3.5rem;
+  }
+  .chat-toggle {
+    bottom: 5.5rem;
+  }
+  .chat-panel {
+    bottom: 9.5rem;
+    right: 1rem;
   }
   .hero-grid,
   .gold-grid {

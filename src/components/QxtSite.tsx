@@ -358,16 +358,18 @@ export function Layout({ children, minimal = false }: { children: ReactNode; min
   return (
     <div className="min-h-screen bg-background text-foreground">
       {!minimal && <Header />}
-      {mode === "local" && (
-        <div className="fixed inset-x-0 top-16 z-30 border-b border-amber-400/30 bg-amber-400/10 px-4 py-2 text-center text-xs text-amber-200">
-          LOCAL MODE · Saved data and local accounts are active. Payments and admin actions require
-          the backend.
-        </div>
-      )}
-      <main className={minimal ? "" : "pt-16"}>{children}</main>
-      {!minimal && <Footer />}
-      {!minimal && <CookieBanner />}
-      {!minimal && <ChatWidget />}
+      <div className={minimal ? "" : "pt-16"}>
+        {mode === "local" && (
+          <div className="border-b border-amber-400/30 bg-amber-400/10 px-4 py-2 text-center text-xs text-amber-200">
+            LOCAL MODE · Saved data and local accounts are active. Payments and admin actions
+            require the backend.
+          </div>
+        )}
+        <main>{children}</main>
+        {!minimal && <Footer />}
+        {!minimal && <CookieBanner />}
+        {!minimal && <ChatWidget />}
+      </div>
     </div>
   );
 }
@@ -448,7 +450,7 @@ function CookieBanner() {
     setShow(false);
   };
   return (
-    <div className="fixed bottom-5 left-1/2 z-50 w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 rounded-lg border border-border bg-surface-elevated p-4 shadow-2xl">
+    <div className="cookie-banner fixed bottom-4 left-1/2 z-50 w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 rounded-lg border border-border bg-surface-elevated p-4 shadow-2xl">
       <div className="grid gap-4 sm:grid-cols-[auto_1fr_auto] sm:items-center">
         <span className="grid size-9 place-items-center rounded-md border border-gold/30 bg-gold/10 text-gold">
           <CookieIcon />
@@ -490,7 +492,7 @@ const supportQuestions = [
   {
     question: "What payment methods do you accept?",
     answer:
-      "The available payment methods are shown during checkout after you select a broker. They are configured and displayed by the website backend.",
+      "The available payment methods are shown during checkout after you select a broker. Choose from the options displayed there to continue.",
   },
   {
     question: "How do I submit my payment proof?",
@@ -556,13 +558,13 @@ function ChatWidget() {
     <>
       <button
         onClick={() => setOpen(!open)}
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-gold/40 bg-surface-elevated px-4 py-3 text-xs font-semibold shadow-xl"
+        className="chat-toggle fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-gold/40 bg-surface-elevated px-4 py-3 text-xs font-semibold shadow-xl"
       >
         <MessageCircle size={16} className="text-gold" />
         <span>24/7 Live Chat</span>
       </button>
       {open && (
-        <div className="fixed bottom-20 right-5 z-40 w-[calc(100%-2.5rem)] max-w-sm rounded-lg border border-border bg-surface-elevated p-5 shadow-2xl">
+        <div className="chat-panel fixed bottom-20 right-5 z-40 w-[calc(100%-2.5rem)] max-w-sm rounded-lg border border-border bg-surface-elevated p-5 shadow-2xl">
           <div className="flex items-center justify-between">
             <b>QXT Support</b>
             <button aria-label="Close chat" onClick={() => setOpen(false)}>
@@ -1108,8 +1110,8 @@ export function ReviewsPage() {
             </div>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
-            {[...reviews, ...reviews].map((r, i) => (
-              <ReviewCard key={i} {...r} />
+            {reviews.map((r) => (
+              <ReviewCard key={r.name} {...r} />
             ))}
           </div>
         </div>
