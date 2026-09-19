@@ -1003,8 +1003,10 @@ async function rejectOrder(req, res, next) {
       "UPDATE payments SET status=$1,rejection_reason=$2,verified_at=now(),verified_by=$3,updated_at=now() WHERE id=$4",
       ["rejected", reason, req.user.id, found.rows[0].payment_id],
     );
-    await audit(client, req.user.id, "payment.rejected", "order", req.params.id, { reason });
     await client.query("COMMIT");
+    void audit(pool, req.user.id, "payment.rejected", "order", req.params.id, { reason }).catch(
+      () => undefined,
+    );
     res.json({
       order: {
         id: req.params.id,

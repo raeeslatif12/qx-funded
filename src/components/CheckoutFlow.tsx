@@ -1353,8 +1353,10 @@ export function AdminDashboardPage() {
       await rejectOrderForAdmin({ orderId: selectedOrder.id, reason: rejectionReason });
       setSelectedOrder(null);
       setRejectionReason("");
-      await loadData();
       setMessage("Order rejected.");
+      void loadData().catch(() => {
+        setMessage("Order rejected. The dashboard is still refreshing.");
+      });
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to reject this order.");
     } finally {
@@ -1378,34 +1380,6 @@ export function AdminDashboardPage() {
       setMessage("Order approved and account delivered.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to approve this order.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleQuickApprove = (order: OrderRecord) => {
-    setSelectedOrder(order);
-    setMessage("");
-    const email = userById.get(order.userId)?.email || "";
-    setApprovalForm({
-      accountEmail: email,
-      accountPassword: buildSuggestedAccountPassword(order.id, email),
-    });
-  };
-
-  const handleQuickReject = async (order: OrderRecord) => {
-    setSubmitting(true);
-    setMessage("");
-    try {
-      await rejectOrderForAdmin({
-        orderId: order.id,
-        reason: "Rejected by admin from dashboard actions.",
-      });
-      if (selectedOrder?.id === order.id) setSelectedOrder(null);
-      await loadData();
-      setMessage("Order rejected.");
-    } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : "Unable to reject this order.");
     } finally {
       setSubmitting(false);
     }
@@ -1872,9 +1846,6 @@ export function AdminDashboardPage() {
                           ) : (
                             filteredOrders.map((order) => {
                               const owner = userById.get(order.userId);
-                              const isActionableOrder =
-                                order.orderStatus === "pending_verification" ||
-                                order.orderStatus === "payment_rejected";
                               return (
                                 <tr key={order.id} className="border-t border-border align-top">
                                   <td className="px-4 py-3 font-mono text-xs">#{order.id}</td>
@@ -1910,28 +1881,6 @@ export function AdminDashboardPage() {
                                       >
                                         View
                                       </button>
-                                      {isActionableOrder ? (
-                                        <>
-                                          <button
-                                            type="button"
-                                            className="btn-small bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
-                                            onClick={() => handleQuickApprove(order)}
-                                          >
-                                            Approve
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn-small bg-red-500/15 text-red-200 hover:bg-red-500/25"
-                                            onClick={() => void handleQuickReject(order)}
-                                          >
-                                            Reject
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">
-                                          Closed
-                                        </span>
-                                      )}
                                     </div>
                                   </td>
                                 </tr>
