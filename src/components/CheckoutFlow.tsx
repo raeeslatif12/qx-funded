@@ -897,18 +897,13 @@ export function UserOrdersDashboardPage() {
 
                 return (
                   <article key={order.id} className="order-card">
-                    <div className="grid gap-3 lg:grid-cols-6 lg:items-center">
+                    <div className="grid gap-3 lg:grid-cols-7 lg:items-center">
                       <span className="font-mono text-xs">#{order.id}</span>
                       <span>{order.planName}</span>
                       <span>{order.broker}</span>
                       <span>{order.paymentMethodName}</span>
                       <span>${order.amount}</span>
-                      <button
-                        type="button"
-                        className="text-left"
-                        onClick={() => selectOrder(order.id)}
-                        aria-pressed={isSelected}
-                      >
+                      <span>
                         <strong
                           className={
                             rejected
@@ -920,6 +915,14 @@ export function UserOrdersDashboardPage() {
                         >
                           {statusLabel(order.orderStatus)}
                         </strong>
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-small btn-secondary w-fit"
+                        onClick={() => selectOrder(order.id)}
+                        aria-expanded={isSelected}
+                      >
+                        {isSelected ? "Hide details" : "View"}
                       </button>
                     </div>
 

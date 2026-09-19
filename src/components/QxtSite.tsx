@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
+  ClipboardList,
   Clock3,
   Headphones,
   LockKeyhole,
@@ -249,6 +250,16 @@ export function Header() {
               Sign In
             </Link>
           )}
+          {user ? (
+            <Link
+              to="/dashboard"
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-gold"
+              activeProps={{ className: "inline-flex items-center gap-2 text-sm text-gold" }}
+            >
+              <ClipboardList size={15} />
+              View Orders
+            </Link>
+          ) : null}
           <GoldLink to="/accounts">Get Funded</GoldLink>
         </div>
         <button
@@ -275,6 +286,14 @@ export function Header() {
             <div className="mt-3 grid gap-3">
               {initializing ? null : user ? (
                 <div className="grid gap-2">
+                  <Link
+                    to="/dashboard"
+                    onClick={() => setOpen(false)}
+                    className="flex items-center gap-3 rounded-md border border-gold/30 bg-gold/10 px-3 py-3 text-sm text-gold"
+                  >
+                    <ClipboardList size={16} />
+                    <span>View Orders</span>
+                  </Link>
                   <Link
                     to="/dashboard"
                     onClick={() => setOpen(false)}
