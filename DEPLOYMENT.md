@@ -3,12 +3,12 @@
 ## Architecture
 
 - Frontend and API: Vercel.
-- API routes: the existing Express application exposed through `api/[...path].mjs` as a Vercel Node serverless function.
+- API routes: the existing Express application exposed through Nitro's generated `api/[...path].func` Vercel function.
 - Database: Neon PostgreSQL through the existing `pg` client and `DATABASE_URL`.
 - Payment proofs: private Vercel Blob objects through `BLOB_READ_WRITE_TOKEN`.
 - Local development: Vite proxies `/api` to the optional local Express launcher.
 
-There is no separate production backend service. `server/index.mjs` contains the API and is imported by the Vercel function adapter. `server/local.mjs` exists only for local development.
+There is no separate production backend service. `server/index.mjs` contains the API and is imported by the Nitro route adapter at `server/routes/api/[...path].mjs`. `server/local.mjs` exists only for local development.
 
 ## Environment variables
 
@@ -77,7 +77,7 @@ npm run build
 4. Add the server environment variables listed above.
 5. Deploy.
 
-The Vercel build uses the `vercel` Nitro preset from `vite.config.ts`. The `api/[...path].mjs` function handles `/api/*` requests and imports the existing Express app. No `app.listen()` call runs on Vercel.
+The Vercel build uses the `vercel` Nitro preset from `vite.config.ts`. Nitro emits one `api/[...path].func` function for `/api/*`, handled by `server/routes/api/[...path].mjs`, plus the separate `__server.func` frontend function. No `app.listen()` call runs on Vercel.
 
 ## API routing
 

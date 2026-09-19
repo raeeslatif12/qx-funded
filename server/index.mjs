@@ -56,6 +56,7 @@ const upload = multer({
     callback(null, isAllowedUpload(file));
   },
 });
+app.set("trust proxy", 1);
 
 if (!process.env.VERCEL) {
   app.use(
