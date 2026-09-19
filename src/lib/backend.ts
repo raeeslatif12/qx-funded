@@ -15,6 +15,7 @@ export type PublicUser = {
   createdAt: string;
   lastLoginAt?: string;
 };
+export type AdminUser = PublicUser;
 export type BrokerRecord = {
   id: string;
   name: string;
@@ -856,8 +857,21 @@ export async function updateAdminPaymentMethod(input: {
   return mapPaymentMethod(result.paymentMethod);
 }
 export async function getUsersForAdmin() {
-  const result = await request<{ users: any[] }>("/api/admin/users");
+  const result = await request<{ users: AdminUser[] }>("/api/admin/users");
   return result.users;
+}
+export async function updateAdminUser(input: {
+  id: string;
+  name: string;
+  email: string;
+  accountStatus: AccountStatus;
+  password?: string;
+}) {
+  const result = await request<{ user: AdminUser }>(
+    `/api/admin/users/${encodeURIComponent(input.id)}`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+  return result.user;
 }
 export async function verifyOrderPayment(input: {
   orderId: string;

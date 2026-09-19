@@ -43,6 +43,8 @@ import {
   updateAdminBroker,
   updateAdminPaymentMethod,
   updateAdminPlan,
+  updateAdminUser,
+  type AdminUser,
   type BrokerRecord,
   type OrderRecord,
   type PaymentMethod,
@@ -161,6 +163,13 @@ function LoadingPage() {
     </Layout>
   );
 }
+
+type AdminUserDraft = {
+  name: string;
+  email: string;
+  accountStatus: AdminUser["accountStatus"];
+  password: string;
+};
 
 function PaymentQrCode({ payload, label }: { payload: string; label: string }) {
   const [source, setSource] = useState<string | null>(null);
@@ -1094,7 +1103,8 @@ export function AdminDashboardPage() {
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [plans, setPlans] = useState<PlanRecord[]>([]);
   const [brokers, setBrokers] = useState<BrokerRecord[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [userDrafts, setUserDrafts] = useState<Record<string, AdminUserDraft>>({});
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [summary, setSummary] = useState({
     totalUsers: 0,
@@ -1170,6 +1180,19 @@ export function AdminDashboardPage() {
     setOrders(loadedOrders);
     setSummary(loadedSummary);
     setUsers(loadedUsers);
+    setUserDrafts(
+      Object.fromEntries(
+        loadedUsers.map((entry) => [
+          entry.id,
+          {
+            name: entry.name,
+            email: entry.email,
+            accountStatus: entry.accountStatus,
+            password: "",
+          },
+        ]),
+      ),
+    );
     setPlans(loadedPlans);
     setBrokers(loadedBrokers);
     setPaymentMethods(loadedPaymentMethods);
@@ -1259,6 +1282,33 @@ export function AdminDashboardPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const updateUser = async (userId: string) => {
+    const draft = userDrafts[userId];
+    if (!draft) return;
+    setSubmitting(true);
+    setMessage("");
+    try {
+      await updateAdminUser({ id: userId, ...draft });
+      await loadData();
+      setMessage("User account updated.");
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Unable to update user account.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const updateUserDraft = <K extends keyof AdminUserDraft>(
+    userId: string,
+    field: K,
+    value: AdminUserDraft[K],
+  ) => {
+    setUserDrafts((current) => {
+      const draft = current[userId];
+      return draft ? { ...current, [userId]: { ...draft, [field]: value } } : current;
+    });
   };
 
   const updatePaymentMethod = async (method: PaymentMethod) => {
@@ -2525,28 +2575,88 @@ export function AdminDashboardPage() {
                       Customer accounts
                     </h2>
                   </div>
+                  <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    Passwords are write-only. Enter a new password to reset it; existing passwords
+                    cannot be viewed.
+                  </div>
                   <div className="overflow-hidden rounded-2xl border border-border bg-background/50">
                     <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
+                      <table className="min-w-[920px] text-left text-sm">
                         <thead className="bg-surface/80">
                           <tr>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Name</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Email</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">
+                              New password
+                            </th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Role</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Action</th>
                           </tr>
                         </thead>
                         <tbody>
                           {users.map((entry) => (
-                            <tr key={entry.id} className="border-t border-border">
-                              <td className="px-4 py-3">{entry.name}</td>
-                              <td className="px-4 py-3">{entry.email}</td>
+                            <tr key={entry.id} className="border-t border-border align-top">
                               <td className="px-4 py-3">
-                                <span className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200">
-                                  {entry.account_status || entry.accountStatus}
-                                </span>
+                                <input
+                                  value={userDrafts[entry.id]?.name || ""}
+                                  onChange={(event) =>
+                                    updateUserDraft(entry.id, "name", event.target.value)
+                                  }
+                                  className="field min-w-40"
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <input
+                                  type="email"
+                                  value={userDrafts[entry.id]?.email || ""}
+                                  onChange={(event) =>
+                                    updateUserDraft(entry.id, "email", event.target.value)
+                                  }
+                                  className="field min-w-56"
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <select
+                                  value={userDrafts[entry.id]?.accountStatus || "active"}
+                                  onChange={(event) =>
+                                    updateUserDraft(
+                                      entry.id,
+                                      "accountStatus",
+                                      event.target.value as AdminUser["accountStatus"],
+                                    )
+                                  }
+                                  className="field min-w-36"
+                                >
+                                  <option value="active">Active</option>
+                                  <option value="pending">Pending</option>
+                                  <option value="suspended">Suspended</option>
+                                  <option value="locked">Locked</option>
+                                </select>
+                              </td>
+                              <td className="px-4 py-3">
+                                <input
+                                  type="password"
+                                  autoComplete="new-password"
+                                  value={userDrafts[entry.id]?.password || ""}
+                                  onChange={(event) =>
+                                    updateUserDraft(entry.id, "password", event.target.value)
+                                  }
+                                  placeholder="Leave unchanged"
+                                  className="field min-w-44"
+                                />
                               </td>
                               <td className="px-4 py-3">{entry.admin ? "Admin" : "Customer"}</td>
+                              <td className="px-4 py-3">
+                                <button
+                                  type="button"
+                                  className="btn-gold whitespace-nowrap"
+                                  disabled={submitting}
+                                  onClick={() => void updateUser(entry.id)}
+                                >
+                                  Save changes
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>

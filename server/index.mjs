@@ -34,7 +34,7 @@ if (!process.env.DATABASE_URL || !sessionSecret)
   throw new Error("DATABASE_URL and SESSION_SECRET are required.");
 if (!process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY)
   throw new Error("FUNDED_ACCOUNT_ENCRYPTION_KEY is required.");
-if (nodeEnvironment === "production" && !blobToken)
+if (nodeEnvironment === "production" && process.env.VERCEL && !blobToken)
   throw new Error("BLOB_READ_WRITE_TOKEN is required in production.");
 if (!["lax", "strict", "none"].includes(cookieSameSite))
   throw new Error("COOKIE_SAME_SITE must be lax, strict, or none.");
@@ -872,10 +872,84 @@ app.get("/api/admin/orders", auth, adminOnly, async (_req, res, next) => {
 app.get("/api/admin/users", auth, adminOnly, async (_req, res, next) => {
   try {
     const result = await pool.query(
-      "SELECT u.id,u.name,u.email,u.account_status,u.created_at,EXISTS(SELECT 1 FROM admin_users a WHERE a.user_id=u.id) AS admin FROM users u ORDER BY u.created_at DESC",
+      "SELECT u.*,EXISTS(SELECT 1 FROM admin_users a WHERE a.user_id=u.id) AS is_admin FROM users u ORDER BY u.created_at DESC",
     );
-    res.json({ users: result.rows });
+    res.json({ users: result.rows.map(publicUser) });
   } catch (error) {
+    next(error);
+  }
+});
+app.patch("/api/admin/users/:id", auth, adminOnly, async (req, res, next) => {
+  const { name, email, accountStatus, password } = req.body || {};
+  const userId = req.params.id;
+  const updates = [];
+  const values = [];
+
+  try {
+    if (typeof name === "string") {
+      const nextName = name.trim();
+      if (!nextName) return jsonError(res, 400, "Name cannot be empty.");
+      updates.push("name = $" + (values.length + 1));
+      values.push(nextName);
+    }
+
+    if (typeof email === "string") {
+      const nextEmail = email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail))
+        return jsonError(res, 400, "Please enter a valid email address.");
+      const existing = await pool.query(
+        "SELECT id FROM users WHERE lower(email)=lower($1) AND id <> $2",
+        [nextEmail, userId],
+      );
+      if (existing.rowCount)
+        return jsonError(res, 409, "An account with that email already exists.");
+      updates.push("email = $" + (values.length + 1));
+      values.push(nextEmail);
+    }
+
+    if (typeof accountStatus === "string") {
+      if (!["active", "pending", "suspended", "locked"].includes(accountStatus))
+        return jsonError(res, 400, "Invalid account status.");
+      updates.push("account_status = $" + (values.length + 1));
+      values.push(accountStatus);
+    }
+
+    if (typeof password === "string" && password.length > 0) {
+      if (password.length < 8)
+        return jsonError(res, 400, "New password must be at least 8 characters long.");
+      updates.push("password_hash = $" + (values.length + 1));
+      values.push(await bcrypt.hash(password, 12));
+    }
+
+    if (updates.length === 0) return jsonError(res, 400, "No account changes were provided.");
+
+    values.push(userId);
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(", ")}, updated_at = now() WHERE id = $${values.length} RETURNING *`,
+      values,
+    );
+    if (!result.rowCount) return jsonError(res, 404, "User not found.");
+
+    if (typeof password === "string" && password.length > 0) {
+      await pool.query("DELETE FROM sessions WHERE user_id=$1", [userId]);
+    }
+    await audit(pool, req.user.id, "update", "user", userId, {
+      fields: updates.map((field) => field.split(" ")[0]),
+      passwordReset: typeof password === "string" && password.length > 0,
+    });
+    const adminResult = await pool.query(
+      "SELECT EXISTS(SELECT 1 FROM admin_users WHERE user_id=$1) AS is_admin",
+      [userId],
+    );
+    res.json({
+      user: publicUser({
+        ...result.rows[0],
+        is_admin: adminResult.rows[0].is_admin,
+      }),
+    });
+  } catch (error) {
+    if (error.code === "23505")
+      return jsonError(res, 409, "An account with that email already exists.");
     next(error);
   }
 });
