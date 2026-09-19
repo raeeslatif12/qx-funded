@@ -76,6 +76,13 @@ function useUser() {
   const { user, initializing } = useAuth();
   return { user, loading: initializing };
 }
+function instantPlanFields(price: string | number) {
+  const calculated = getCustomDirectPlan(Number(price));
+  return {
+    size: calculated?.size || "",
+    dailyLoss: calculated?.dailyLoss || "",
+  };
+}
 function AuthRequired({ next }: { next: string }) {
   return (
     <Layout>
@@ -1136,10 +1143,12 @@ export function AdminDashboardPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
-  const instantPlanFields = (price: string | number) => {
-    const calculated = getCustomDirectPlan(Number(price));
-    return calculated ? { size: calculated.size, dailyLoss: calculated.dailyLoss } : {};
-  };
+  useEffect(() => {
+    if (newPlan.type !== "Instant") return;
+    const fields = instantPlanFields(newPlan.price);
+    if (fields.size === newPlan.size && fields.dailyLoss === newPlan.dailyLoss) return;
+    setNewPlan((current) => ({ ...current, ...fields }));
+  }, [newPlan.dailyLoss, newPlan.price, newPlan.size, newPlan.type]);
 
   const loadData = async () => {
     if (!user?.admin) return;
@@ -1765,6 +1774,7 @@ export function AdminDashboardPage() {
                       Size
                       <input
                         value={newPlan.size}
+                        readOnly={newPlan.type === "Instant"}
                         onChange={(event) =>
                           setNewPlan((current) => ({ ...current, size: event.target.value }))
                         }
@@ -1793,6 +1803,7 @@ export function AdminDashboardPage() {
                       Daily loss
                       <input
                         value={newPlan.dailyLoss}
+                        readOnly={newPlan.type === "Instant"}
                         onChange={(event) =>
                           setNewPlan((current) => ({ ...current, dailyLoss: event.target.value }))
                         }
@@ -1913,6 +1924,7 @@ export function AdminDashboardPage() {
                             Size
                             <input
                               value={plan.size}
+                              readOnly={plan.type === "Instant"}
                               onChange={(event) =>
                                 setPlans((current) =>
                                   current.map((entry) =>
@@ -1953,6 +1965,7 @@ export function AdminDashboardPage() {
                             Daily loss
                             <input
                               value={plan.dailyLoss}
+                              readOnly={plan.type === "Instant"}
                               onChange={(event) =>
                                 setPlans((current) =>
                                   current.map((entry) =>
