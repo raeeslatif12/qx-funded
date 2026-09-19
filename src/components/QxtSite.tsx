@@ -20,10 +20,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { brokers, challengePlans, faqs, instantPlans, reviews, type Plan } from "@/lib/qxt-data";
+import { useAuth } from "@/lib/auth";
 import {
   getActiveBrokersWithCache,
   getConnectionMode,
-  getCurrentUser,
   getCachedBrokers,
   getCachedPlans,
   getPlansWithCache,
@@ -150,18 +150,8 @@ export function Logo() {
 export function Header() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<{ name: string } | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    getCurrentUser().then((currentUser) => {
-      if (active) setUser(currentUser);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
+  const { user, initializing, signOut } = useAuth();
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -185,9 +175,8 @@ export function Header() {
 
   const handleLogout = async () => {
     try {
-      await logoutUser();
+      await signOut();
     } finally {
-      setUser(null);
       setProfileOpen(false);
       navigate({ to: "/login" });
     }
@@ -210,7 +199,12 @@ export function Header() {
           ))}
         </nav>
         <div className="hidden items-center gap-5 lg:flex">
-          {user ? (
+          {initializing ? (
+            <div
+              className="h-8 w-24 animate-pulse rounded-md bg-muted"
+              aria-label="Loading account"
+            />
+          ) : user ? (
             <div id="profile-menu-wrapper" className="relative">
               <button
                 type="button"
@@ -270,7 +264,7 @@ export function Header() {
               </Link>
             ))}
             <div className="mt-3 grid gap-3">
-              {user ? (
+              {initializing ? null : user ? (
                 <div className="grid gap-2">
                   <Link
                     to="/dashboard"
@@ -481,8 +475,83 @@ function CookieBanner() {
 function CookieIcon() {
   return <span className="text-base">◔</span>;
 }
+
+const supportQuestions = [
+  {
+    question: "What is QX Funded?",
+    answer:
+      "QXT Funded gives skilled traders access to Instant or Challenge accounts in simulated trading environments, with funding available after the applicable evaluation path.",
+  },
+  {
+    question: "How can I purchase a challenge?",
+    answer:
+      "Open Accounts, choose Challenge Accounts, select a plan, and follow the checkout steps to choose a broker, payment method, and submit payment proof.",
+  },
+  {
+    question: "What payment methods do you accept?",
+    answer:
+      "The available payment methods are shown during checkout after you select a broker. They are configured and displayed by the website backend.",
+  },
+  {
+    question: "How do I submit my payment proof?",
+    answer:
+      "After sending the exact payment amount, select I Have Paid in checkout. The next step lets you upload your payment proof and submit it with the order.",
+  },
+  {
+    question: "How long does order verification take?",
+    answer:
+      "The How It Works page says most verifications complete within one business day. You can follow the current order status from your dashboard.",
+  },
+  {
+    question: "Where can I see my order status?",
+    answer:
+      "Sign in and open your Trader Dashboard at /dashboard. Your orders and their current statuses are listed there.",
+  },
+  {
+    question: "How do I access my funded account?",
+    answer:
+      "After an order is approved, open that order in your dashboard. Approved orders provide access to the funded account credentials when they are available.",
+  },
+  {
+    question: "Where can I find my funded account credentials?",
+    answer:
+      "Open the approved order in your dashboard and use its account section to reveal the available email and password credentials.",
+  },
+  {
+    question: "What happens after my payment is approved?",
+    answer:
+      "The order moves to an approved status, and the account credentials become available from the approved order in your dashboard.",
+  },
+  {
+    question: "Can I have multiple accounts?",
+    answer:
+      "You can purchase another account by returning to Accounts and selecting an additional plan. Each purchase is tracked as its own order in your dashboard.",
+  },
+  {
+    question: "How can I contact support?",
+    answer:
+      "Open the Support or Contact page, or email support@qxtfunded.org. The website also provides a support ticket option for account, billing, and technical issues.",
+  },
+  {
+    question: "How do I update my account information?",
+    answer: "Sign in and open Account Settings to update your profile information.",
+  },
+] as const;
+
+type ChatMessage = { sender: "support" | "customer"; text: string };
+
 function ChatWidget() {
   const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  const askQuestion = (question: (typeof supportQuestions)[number]) => {
+    setMessages((current) => [
+      ...current,
+      { sender: "customer", text: question.question },
+      { sender: "support", text: question.answer },
+    ]);
+  };
+
   return (
     <>
       <button
@@ -500,8 +569,34 @@ function ChatWidget() {
               <X size={18} />
             </button>
           </div>
-          <div className="my-5 rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            Hi! How can we help you today?
+          <div className="my-5 max-h-80 space-y-3 overflow-y-auto pr-1">
+            <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+              Hi! How can we help you today?
+            </div>
+            {messages.map((message, index) => (
+              <div
+                key={`${message.sender}-${index}`}
+                className={`rounded-md p-3 text-sm ${
+                  message.sender === "customer"
+                    ? "ml-5 bg-gold/10 text-foreground"
+                    : "mr-5 bg-muted text-muted-foreground"
+                }`}
+              >
+                {message.text}
+              </div>
+            ))}
+            <div className="space-y-2">
+              {supportQuestions.map((question) => (
+                <button
+                  key={question.question}
+                  type="button"
+                  className="block w-full rounded-md border border-border bg-surface px-3 py-2 text-left text-xs text-muted-foreground transition hover:border-gold hover:text-foreground"
+                  onClick={() => askQuestion(question)}
+                >
+                  {question.question}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex gap-2">
             <input className="field" placeholder="Type a message…" />
@@ -1215,6 +1310,7 @@ export function LegalPage({ document }: { document: LegalDocument }) {
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const { setUser } = useAuth();
   const inFlight = useRef(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1227,7 +1323,7 @@ export function LoginPage() {
     setError("");
     const data = new FormData(e.currentTarget);
     try {
-      await (mode === "login"
+      const authenticatedUser = await (mode === "login"
         ? loginUser({
             email: String(data.get("email") || ""),
             password: String(data.get("password") || ""),
@@ -1242,8 +1338,9 @@ export function LoginPage() {
             email: String(data.get("email") || ""),
             password: String(data.get("password") || ""),
           }));
-      if (!(await getCurrentUser()))
+      if (!authenticatedUser)
         throw new Error("Unable to establish your session. Please try again.");
+      setUser(authenticatedUser);
       const redirect = new URLSearchParams(
         typeof window !== "undefined" ? window.location.search : "",
       ).get("redirect");
@@ -1353,17 +1450,14 @@ export function CheckoutPage() {
   const planId =
     new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("plan") ||
     "instant-3000";
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const { user, initializing } = useAuth();
   const next = `/checkout/broker?plan=${encodeURIComponent(planId)}`;
   const navigate = useNavigate();
   useEffect(() => {
-    getCurrentUser().then((user) => setIsAuthenticated(Boolean(user)));
-  }, []);
-  useEffect(() => {
-    if (isAuthenticated === null) return;
-    if (isAuthenticated) navigate({ to: "/checkout/broker", search: { plan: planId } });
+    if (initializing) return;
+    if (user) navigate({ to: "/checkout/broker", search: { plan: planId } });
     else navigate({ to: "/login", search: { redirect: next } });
-  }, [isAuthenticated, navigate, next, planId]);
+  }, [initializing, navigate, next, planId, user]);
   return (
     <Layout>
       <section className="section">
@@ -1371,16 +1465,19 @@ export function CheckoutPage() {
           <p className="eyebrow">Secure checkout</p>
           <h1 className="mt-4 text-4xl font-semibold">Continue to checkout</h1>
           <p className="mt-3 text-muted-foreground">
-            {isAuthenticated
-              ? "Continue to broker selection."
-              : "Login or create an account before selecting your broker."}
+            {initializing
+              ? "Checking your session."
+              : user
+                ? "Continue to broker selection."
+                : "Login or create an account before selecting your broker."}
           </p>
           <Link
-            to={isAuthenticated ? "/checkout/broker" : "/login"}
-            search={isAuthenticated ? { plan: planId } : { redirect: next }}
+            to={user ? "/checkout/broker" : "/login"}
+            search={user ? { plan: planId } : { redirect: next }}
             className="btn-gold mt-7"
           >
-            {isAuthenticated ? "Continue" : "Login / Sign Up"} <ArrowRight size={15} />
+            {initializing ? "Checking session" : user ? "Continue" : "Login / Sign Up"}{" "}
+            <ArrowRight size={15} />
           </Link>
         </div>
       </section>

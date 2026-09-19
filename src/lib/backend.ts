@@ -91,6 +91,11 @@ export type FundedAccount = {
 export type ConnectionMode = "server" | "local";
 export type ApiFailureKind = "network" | "timeout" | "http";
 
+export type CurrentUserResult =
+  | { status: "authenticated"; user: PublicUser }
+  | { status: "unauthenticated"; user: null }
+  | { status: "unavailable"; user: null };
+
 export class ApiError extends Error {
   readonly kind: ApiFailureKind;
   readonly status?: number;
@@ -511,27 +516,37 @@ function mapOrder(row: any): OrderRecord {
   };
 }
 
-export async function getCurrentUser() {
+export async function checkCurrentUser(): Promise<CurrentUserResult> {
   try {
     const result = await request<{ user: PublicUser }>("/api/auth/me");
     setLocalSession(null);
     setConnectionMode("server");
     cacheUserProfile(result.user);
     void syncPendingProfile(result.user);
-    return result.user;
+    return { status: "authenticated", user: result.user };
   } catch (error) {
     const localSession = getLocalSession();
     if (isBackendUnavailable(error)) {
-      if (localSession) setConnectionMode("local");
-      if (localSession) return localSession;
+      if (localSession) {
+        setConnectionMode("local");
+        return { status: "authenticated", user: localSession };
+      }
       const cachedProfile = getCachedUserProfile();
       if (cachedProfile) {
         setConnectionMode("local");
-        return cachedProfile.data;
+        return { status: "authenticated", user: cachedProfile.data };
       }
+      return { status: "unavailable", user: null };
     }
-    return null;
+    if (error instanceof ApiError && error.status === 401) {
+      return { status: "unauthenticated", user: null };
+    }
+    return { status: "unavailable", user: null };
   }
+}
+export async function getCurrentUser() {
+  const result = await checkCurrentUser();
+  return result.user;
 }
 export async function registerUser(input: { name: string; email: string; password: string }) {
   try {

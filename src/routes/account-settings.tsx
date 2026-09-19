@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
-import { getCurrentUser, updateAccountSettingsWithFallback } from "@/lib/backend";
+import { useAuth } from "@/lib/auth";
+import { updateAccountSettingsWithFallback } from "@/lib/backend";
 import { Layout } from "@/components/QxtSite";
 
 export const Route = createFileRoute("/account-settings")({
@@ -15,6 +16,7 @@ export const Route = createFileRoute("/account-settings")({
 
 function AccountSettingsPage() {
   const navigate = useNavigate();
+  const { user, initializing, setUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -23,27 +25,15 @@ function AccountSettingsPage() {
   const [email, setEmail] = useState("");
 
   useEffect(() => {
-    let active = true;
-    getCurrentUser()
-      .then((user) => {
-        if (!active) return;
-        if (!user) {
-          navigate({ to: "/login" });
-          return;
-        }
-        setName(user.name);
-        setEmail(user.email);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (active) {
-          navigate({ to: "/login" });
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [navigate]);
+    if (initializing) return;
+    if (!user) {
+      navigate({ to: "/login" });
+      return;
+    }
+    setName(user.name);
+    setEmail(user.email);
+    setLoading(false);
+  }, [initializing, navigate, user]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -79,6 +69,7 @@ function AccountSettingsPage() {
       }
 
       const updatedUser = await updateAccountSettingsWithFallback(payload);
+      setUser(updatedUser);
       setMessage("Your account details were updated successfully.");
       setName(updatedUser.name);
       setEmail(updatedUser.email);

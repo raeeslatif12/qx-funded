@@ -11,6 +11,7 @@ import {
 import QRCode from "qrcode";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useAuth } from "@/lib/auth";
 import {
   approveOrderForAdmin,
   createAdminBroker,
@@ -71,14 +72,8 @@ function buildSuggestedAccountPassword(orderId: string, email: string) {
   return `${seed.toUpperCase()}-${suffix}!`;
 }
 function useUser() {
-  const [user, setUser] = useState<PublicUser | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    getCurrentUser()
-      .then(setUser)
-      .finally(() => setLoading(false));
-  }, []);
-  return { user, loading };
+  const { user, initializing } = useAuth();
+  return { user, loading: initializing };
 }
 function AuthRequired({ next }: { next: string }) {
   return (
@@ -804,7 +799,10 @@ export function UserOrdersDashboardPage() {
               <div className="order-card text-muted-foreground">Loading your orders...</div>
             ) : orders.length === 0 ? (
               <div className="order-card text-muted-foreground">
-                No orders yet. Choose an account to get started.
+                <p>No orders yet. Choose an account to get started.</p>
+                <Link to="/accounts" className="btn-gold mt-5 w-fit">
+                  Order Now <ArrowRight size={15} />
+                </Link>
               </div>
             ) : (
               orders.map((order) => {
@@ -973,19 +971,14 @@ export function UserOrdersDashboardPage() {
 
 export function AdminLoginPage() {
   const navigate = useNavigate();
+  const { user: currentUser, initializing, setUser } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let active = true;
-    getCurrentUser().then((currentUser) => {
-      if (active && currentUser?.admin) navigate({ to: "/admin-dashboard" });
-    });
-    return () => {
-      active = false;
-    };
-  }, [navigate]);
+    if (!initializing && currentUser?.admin) navigate({ to: "/admin-dashboard" });
+  }, [currentUser, initializing, navigate]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -995,10 +988,10 @@ export function AdminLoginPage() {
 
     try {
       const user = await loginUser({ email: form.email.trim(), password: form.password });
-      const currentUser = await getCurrentUser();
-      if (!currentUser?.admin || currentUser.email.toLowerCase() !== user.email.toLowerCase()) {
+      if (!user.admin || user.email.toLowerCase() !== form.email.trim().toLowerCase()) {
         throw new Error("This account is not authorized for the admin dashboard.");
       }
+      setUser(user);
       navigate({ to: "/admin-dashboard" });
     } catch (caught) {
       setError(
