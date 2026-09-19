@@ -11,7 +11,7 @@ import pg from "pg";
 
 const { Pool } = pg;
 const app = express();
-const port = Number(process.env.BACKEND_PORT || 3000);
+const port = Number(process.env.PORT || process.env.BACKEND_PORT || 3000);
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((value) => value.trim())
