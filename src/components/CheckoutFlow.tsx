@@ -5,6 +5,9 @@ import {
   Check,
   Copy,
   CreditCard,
+  Eye,
+  EyeOff,
+  Pencil,
   Upload,
   WalletCards,
 } from "lucide-react";
@@ -68,6 +71,15 @@ function statusLabel(status: string) {
   if (status === "approved" || status === "active") return "Approved";
   if (status === "rejected" || status === "payment_rejected") return "Rejected";
   return status;
+}
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 function buildSuggestedAccountPassword(orderId: string, email: string) {
   const seed = (email.split("@")[0] || "QXT").replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "QXT";
@@ -169,6 +181,7 @@ type AdminUserDraft = {
   email: string;
   accountStatus: AdminUser["accountStatus"];
   password: string;
+  showPassword: boolean;
 };
 
 function PaymentQrCode({ payload, label }: { payload: string; label: string }) {
@@ -862,8 +875,16 @@ export function UserOrdersDashboardPage() {
                         onClick={() => selectOrder(order.id)}
                         aria-pressed={isSelected}
                       >
-                        <strong className={rejected ? "text-red-400" : "text-gold"}>
-                          {isSelected ? "Open account" : statusLabel(order.orderStatus)}
+                        <strong
+                          className={
+                            rejected
+                              ? "text-red-400"
+                              : order.orderStatus === "pending_verification"
+                                ? "text-amber-300"
+                                : "text-gold"
+                          }
+                        >
+                          {statusLabel(order.orderStatus)}
                         </strong>
                       </button>
                     </div>
@@ -1106,6 +1127,7 @@ export function AdminDashboardPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userDrafts, setUserDrafts] = useState<Record<string, AdminUserDraft>>({});
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [userSearch, setUserSearch] = useState("");
   const [summary, setSummary] = useState({
     totalUsers: 0,
     totalOrders: 0,
@@ -1118,6 +1140,7 @@ export function AdminDashboardPage() {
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [search, setSearch] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [approvalForm, setApprovalForm] = useState({ accountEmail: "", accountPassword: "" });
   const [newPlan, setNewPlan] = useState({
@@ -1152,6 +1175,12 @@ export function AdminDashboardPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (!message) return;
+    const timeout = window.setTimeout(() => setMessage(""), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
 
   useEffect(() => {
     if (newPlan.type !== "Instant") return;
@@ -1189,6 +1218,7 @@ export function AdminDashboardPage() {
             email: entry.email,
             accountStatus: entry.accountStatus,
             password: "",
+            showPassword: false,
           },
         ]),
       ),
@@ -1203,6 +1233,11 @@ export function AdminDashboardPage() {
   }, [user]);
 
   const userById = useMemo(() => new Map(users.map((entry) => [entry.id, entry])), [users]);
+  const filteredUsers = useMemo(() => {
+    const query = userSearch.trim().toLowerCase();
+    if (!query) return users;
+    return users.filter((entry) => `${entry.name} ${entry.email}`.toLowerCase().includes(query));
+  }, [userSearch, users]);
   const filteredOrders = useMemo(
     () =>
       orders.filter((order) => {
@@ -1230,6 +1265,7 @@ export function AdminDashboardPage() {
       setSelectedOrder(null);
       setRejectionReason("");
       await loadData();
+      setMessage("Order rejected.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to reject this order.");
     } finally {
@@ -1250,6 +1286,7 @@ export function AdminDashboardPage() {
       setSelectedOrder(null);
       setApprovalForm({ accountEmail: "", accountPassword: "" });
       await loadData();
+      setMessage("Order approved and account delivered.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to approve this order.");
     } finally {
@@ -1277,6 +1314,7 @@ export function AdminDashboardPage() {
       });
       if (selectedOrder?.id === order.id) setSelectedOrder(null);
       await loadData();
+      setMessage("Order rejected.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to reject this order.");
     } finally {
@@ -1287,11 +1325,13 @@ export function AdminDashboardPage() {
   const updateUser = async (userId: string) => {
     const draft = userDrafts[userId];
     if (!draft) return;
+    const { showPassword: _showPassword, ...payload } = draft;
     setSubmitting(true);
     setMessage("");
     try {
-      await updateAdminUser({ id: userId, ...draft });
+      await updateAdminUser({ id: userId, ...payload });
       await loadData();
+      setEditingUser(null);
       setMessage("User account updated.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to update user account.");
@@ -1325,6 +1365,7 @@ export function AdminDashboardPage() {
         instructions: method.instructions,
       });
       await loadData();
+      setMessage("Payment method updated.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to update payment method.");
     } finally {
@@ -1368,6 +1409,7 @@ export function AdminDashboardPage() {
         popular: false,
       });
       await loadData();
+      setMessage("Plan created.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to create plan.");
     } finally {
@@ -1394,6 +1436,7 @@ export function AdminDashboardPage() {
       if (plan.drawdown) payload.drawdown = plan.drawdown;
       await updateAdminPlan(payload);
       await loadData();
+      setMessage("Plan updated.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to update plan.");
     } finally {
@@ -1407,6 +1450,7 @@ export function AdminDashboardPage() {
     try {
       await deleteAdminPlan(id);
       await loadData();
+      setMessage("Plan deleted.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to delete plan.");
     } finally {
@@ -1428,6 +1472,7 @@ export function AdminDashboardPage() {
       await createAdminBroker(payload);
       setNewBroker({ id: "", name: "", image: "", copy: "", enabled: true });
       await loadData();
+      setMessage("Broker created.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to create broker.");
     } finally {
@@ -1447,6 +1492,7 @@ export function AdminDashboardPage() {
         enabled: broker.enabled,
       });
       await loadData();
+      setMessage("Broker updated.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to update broker.");
     } finally {
@@ -1460,6 +1506,7 @@ export function AdminDashboardPage() {
     try {
       await deleteAdminBroker(id);
       await loadData();
+      setMessage("Broker deleted.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to delete broker.");
     } finally {
@@ -1493,6 +1540,7 @@ export function AdminDashboardPage() {
         maximumAmount: "",
       });
       await loadData();
+      setMessage("Payment method added.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to add payment method.");
     } finally {
@@ -1506,6 +1554,7 @@ export function AdminDashboardPage() {
     try {
       await deleteAdminPaymentMethod(id);
       await loadData();
+      setMessage("Payment method deleted.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to delete payment method.");
     } finally {
@@ -1515,6 +1564,21 @@ export function AdminDashboardPage() {
 
   if (loading) return <AdminLoadingPage />;
   if (!user?.admin) return <AdminAuthRequired next="/admin-dashboard" />;
+  const editingDraft: AdminUserDraft = editingUser
+    ? (userDrafts[editingUser.id] ?? {
+        name: "",
+        email: "",
+        accountStatus: "active",
+        password: "",
+        showPassword: false,
+      })
+    : {
+        name: "",
+        email: "",
+        accountStatus: "active",
+        password: "",
+        showPassword: false,
+      };
 
   const tabs = [
     { key: "dashboard", label: "Dashboard" },
@@ -1562,8 +1626,14 @@ export function AdminDashboardPage() {
 
             <main className="rounded-3xl border border-border bg-surface p-5 shadow-[0_18px_48px_rgba(0,0,0,0.12)]">
               {message ? (
-                <div className="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
-                  {message}
+                <div
+                  role="status"
+                  className="pointer-events-none fixed right-4 top-4 z-[70] w-[min(360px,calc(100vw-2rem))] rounded-xl border border-amber-400/30 bg-slate-900/95 p-3 text-sm text-amber-100 shadow-2xl shadow-black/30 backdrop-blur"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-400" />
+                    <span>{message}</span>
+                  </div>
                 </div>
               ) : null}
 
@@ -1695,6 +1765,7 @@ export function AdminDashboardPage() {
                             <th className="px-4 py-3 font-medium text-muted-foreground">Plan</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Broker</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Amount</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Placed</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Actions</th>
                           </tr>
@@ -1703,7 +1774,7 @@ export function AdminDashboardPage() {
                           {filteredOrders.length === 0 ? (
                             <tr>
                               <td
-                                colSpan={7}
+                                colSpan={8}
                                 className="px-4 py-10 text-center text-muted-foreground"
                               >
                                 No orders match your current filters.
@@ -1730,6 +1801,9 @@ export function AdminDashboardPage() {
                                   <td className="px-4 py-3">{order.broker}</td>
                                   <td className="px-4 py-3">
                                     ${Number(order.amount || 0).toFixed(2)}
+                                  </td>
+                                  <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+                                    {formatDateTime(order.createdAt)}
                                   </td>
                                   <td className="px-4 py-3">
                                     <span
@@ -2569,11 +2643,45 @@ export function AdminDashboardPage() {
 
               {activeTab === "users" && (
                 <>
-                  <div className="mb-6">
-                    <p className="eyebrow">Users</p>
-                    <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                      Customer accounts
-                    </h2>
+                  <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <p className="eyebrow">Users</p>
+                      <h2 className="mt-2 text-3xl font-semibold text-foreground">
+                        Customer accounts
+                      </h2>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Update profiles, control access, or issue a secure password reset.
+                      </p>
+                    </div>
+                    <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                      Search accounts
+                      <input
+                        value={userSearch}
+                        onChange={(event) => setUserSearch(event.target.value)}
+                        placeholder="Name or email"
+                        className="field min-w-64 normal-case tracking-normal"
+                      />
+                    </label>
+                  </div>
+                  <div className="mb-5 grid gap-3 sm:grid-cols-3">
+                    {[
+                      ["All accounts", users.length],
+                      ["Active", users.filter((entry) => entry.accountStatus === "active").length],
+                      [
+                        "Restricted",
+                        users.filter((entry) => entry.accountStatus !== "active").length,
+                      ],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="rounded-2xl border border-border bg-background/60 p-4"
+                      >
+                        <p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                          {label}
+                        </p>
+                        <p className="mt-2 text-2xl font-semibold text-foreground">{value}</p>
+                      </div>
+                    ))}
                   </div>
                   <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
                     Passwords are write-only. Enter a new password to reset it; existing passwords
@@ -2584,77 +2692,42 @@ export function AdminDashboardPage() {
                       <table className="min-w-[920px] text-left text-sm">
                         <thead className="bg-surface/80">
                           <tr>
-                            <th className="px-4 py-3 font-medium text-muted-foreground">Name</th>
-                            <th className="px-4 py-3 font-medium text-muted-foreground">Email</th>
-                            <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">User</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">
-                              New password
+                              Registered
                             </th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
                             <th className="px-4 py-3 font-medium text-muted-foreground">Role</th>
-                            <th className="px-4 py-3 font-medium text-muted-foreground">Action</th>
+                            <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                              Edit
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {users.map((entry) => (
+                          {filteredUsers.map((entry) => (
                             <tr key={entry.id} className="border-t border-border align-top">
                               <td className="px-4 py-3">
-                                <input
-                                  value={userDrafts[entry.id]?.name || ""}
-                                  onChange={(event) =>
-                                    updateUserDraft(entry.id, "name", event.target.value)
-                                  }
-                                  className="field min-w-40"
-                                />
+                                <p className="font-medium text-foreground">{entry.name}</p>
+                                <p className="text-xs text-muted-foreground">{entry.email}</p>
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+                                {formatDateTime(entry.createdAt)}
                               </td>
                               <td className="px-4 py-3">
-                                <input
-                                  type="email"
-                                  value={userDrafts[entry.id]?.email || ""}
-                                  onChange={(event) =>
-                                    updateUserDraft(entry.id, "email", event.target.value)
-                                  }
-                                  className="field min-w-56"
-                                />
-                              </td>
-                              <td className="px-4 py-3">
-                                <select
-                                  value={userDrafts[entry.id]?.accountStatus || "active"}
-                                  onChange={(event) =>
-                                    updateUserDraft(
-                                      entry.id,
-                                      "accountStatus",
-                                      event.target.value as AdminUser["accountStatus"],
-                                    )
-                                  }
-                                  className="field min-w-36"
-                                >
-                                  <option value="active">Active</option>
-                                  <option value="pending">Pending</option>
-                                  <option value="suspended">Suspended</option>
-                                  <option value="locked">Locked</option>
-                                </select>
-                              </td>
-                              <td className="px-4 py-3">
-                                <input
-                                  type="password"
-                                  autoComplete="new-password"
-                                  value={userDrafts[entry.id]?.password || ""}
-                                  onChange={(event) =>
-                                    updateUserDraft(entry.id, "password", event.target.value)
-                                  }
-                                  placeholder="Leave unchanged"
-                                  className="field min-w-44"
-                                />
+                                <span className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200">
+                                  {entry.accountStatus}
+                                </span>
                               </td>
                               <td className="px-4 py-3">{entry.admin ? "Admin" : "Customer"}</td>
-                              <td className="px-4 py-3">
+                              <td className="px-4 py-3 text-right">
                                 <button
                                   type="button"
-                                  className="btn-gold whitespace-nowrap"
-                                  disabled={submitting}
-                                  onClick={() => void updateUser(entry.id)}
+                                  aria-label={`Edit ${entry.name}`}
+                                  title={`Edit ${entry.name}`}
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-gold/50 hover:bg-gold/10 hover:text-gold"
+                                  onClick={() => setEditingUser(entry)}
                                 >
-                                  Save changes
+                                  <Pencil size={15} />
                                 </button>
                               </td>
                             </tr>
@@ -2668,6 +2741,124 @@ export function AdminDashboardPage() {
             </main>
           </div>
         </div>
+
+        {editingUser && editingDraft && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+            onClick={() => setEditingUser(null)}
+          >
+            <div
+              className="w-full max-w-xl rounded-3xl border border-border bg-surface-elevated p-6 shadow-[0_28px_80px_rgba(0,0,0,0.42)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="eyebrow">Account management</p>
+                  <h3 className="mt-2 text-2xl font-semibold text-foreground">Edit user</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Update profile details, access status, or reset the password.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-small btn-secondary"
+                  onClick={() => setEditingUser(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Full name
+                  <input
+                    value={editingDraft.name}
+                    onChange={(event) =>
+                      updateUserDraft(editingUser.id, "name", event.target.value)
+                    }
+                    className="field"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Email address
+                  <input
+                    type="email"
+                    value={editingDraft.email}
+                    onChange={(event) =>
+                      updateUserDraft(editingUser.id, "email", event.target.value)
+                    }
+                    className="field"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-muted-foreground">
+                  Account status
+                  <select
+                    value={editingDraft.accountStatus}
+                    onChange={(event) =>
+                      updateUserDraft(
+                        editingUser.id,
+                        "accountStatus",
+                        event.target.value as AdminUser["accountStatus"],
+                      )
+                    }
+                    className="field"
+                  >
+                    <option value="active">Active</option>
+                    <option value="pending">Pending</option>
+                    <option value="suspended">Suspended</option>
+                    <option value="locked">Locked</option>
+                  </select>
+                </label>
+                <div className="grid gap-2 text-sm text-muted-foreground">
+                  <label htmlFor="admin-reset-password">New password</label>
+                  <div className="relative">
+                    <input
+                      id="admin-reset-password"
+                      type={editingDraft.showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={editingDraft.password}
+                      onChange={(event) =>
+                        updateUserDraft(editingUser.id, "password", event.target.value)
+                      }
+                      placeholder="Leave unchanged"
+                      className="field pr-11"
+                    />
+                    <button
+                      type="button"
+                      aria-label="Toggle new password visibility"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        updateUserDraft(editingUser.id, "showPassword", !editingDraft.showPassword)
+                      }
+                    >
+                      {editingDraft.showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-5 text-amber-100">
+                Existing passwords cannot be viewed. Enter a new password only when you want to
+                reset this account.
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setEditingUser(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-gold"
+                  disabled={submitting}
+                  onClick={() => void updateUser(editingUser.id)}
+                >
+                  {submitting ? "Saving..." : "Save changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {selectedOrder && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">

@@ -511,6 +511,7 @@ function mapOrder(row: any): OrderRecord {
     createdAt: row.created_at ?? row.createdAt,
     updatedAt: row.updated_at ?? row.updatedAt,
     transactionHash: row.transaction_id ?? row.transactionHash,
+    rejectionReason: row.rejection_reason ?? row.rejectionReason,
     paymentProof: row.payment_proof
       ? `/api/orders/${encodeURIComponent(normalizePlainText(row.id))}/payment-proof/${encodeURIComponent(normalizePlainText(row.payment_proof_id))}`
       : row.paymentProof,
