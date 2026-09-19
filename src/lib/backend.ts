@@ -89,6 +89,70 @@ export type FundedAccount = {
 };
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const BACKEND_REQUEST_TIMEOUT_MS = 8000;
+
+export type CacheResult<T> = {
+  data: T;
+  source: "server" | "cache";
+  cachedAt?: number;
+};
+
+const CACHE_VERSION = 1;
+export const CACHE_KEYS = {
+  plans: "qxt-cache-plans",
+  brokers: "qxt-cache-brokers",
+  userOrders: (userId: string) => `qxt-cache-orders-${userId}`,
+} as const;
+
+type CacheEnvelope<T> = {
+  version: number;
+  savedAt: number;
+  data: T;
+};
+
+export function readLocalCache<T>(key: string): { data: T; cachedAt: number } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CacheEnvelope<T>>;
+    if (parsed.version !== CACHE_VERSION || typeof parsed.savedAt !== "number") return null;
+    return { data: parsed.data as T, cachedAt: parsed.savedAt };
+  } catch {
+    return null;
+  }
+}
+
+export function writeLocalCache<T>(key: string, data: T) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        version: CACHE_VERSION,
+        savedAt: Date.now(),
+        data,
+      } satisfies CacheEnvelope<T>),
+    );
+  } catch {
+    // Storage can be unavailable or full; the server-backed flow still works.
+  }
+}
+
+async function serverFirstWithCache<T>(
+  key: string,
+  loader: () => Promise<T>,
+): Promise<CacheResult<T>> {
+  try {
+    const data = await loader();
+    writeLocalCache(key, data);
+    return { data, source: "server" };
+  } catch (error) {
+    const cached = readLocalCache<T>(key);
+    if (cached) return { data: cached.data, source: "cache", cachedAt: cached.cachedAt };
+    throw error;
+  }
+}
 
 function normalizePlainText(value: unknown): string {
   if (typeof value === "string") return value.trim().replace(/^['"]+|['"]+$/g, "");
@@ -96,10 +160,13 @@ function normalizePlainText(value: unknown): string {
 }
 
 async function request<T>(path: string, options: RequestInit = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), BACKEND_REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(`${API_URL}${path}`, {
       ...options,
       credentials: "include",
+      signal: options.signal || controller.signal,
       headers: {
         ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
         ...options.headers,
@@ -112,12 +179,17 @@ async function request<T>(path: string, options: RequestInit = {}) {
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The QXT API request timed out. Please try again.");
+    }
     if (error instanceof TypeError && error.message === "Failed to fetch") {
       throw new Error(
         "Unable to reach the QXT API. Start the backend server and check that the frontend origin is allowed.",
       );
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -226,12 +298,27 @@ export async function getPlans() {
   const result = await request<{ plans: any[] }>("/api/plans");
   return result.plans.map(mapPlan);
 }
+export function getCachedPlans() {
+  return readLocalCache<PlanRecord[]>(CACHE_KEYS.plans);
+}
+export function getPlansWithCache() {
+  return serverFirstWithCache(CACHE_KEYS.plans, getPlans);
+}
 export async function getPlanById(id: string) {
   return (await getPlans()).find((plan) => plan.id === id) ?? null;
+}
+export async function getPlanByIdWithCache(id: string) {
+  return (await getPlansWithCache()).data.find((plan) => plan.id === id) ?? null;
 }
 export async function getActiveBrokers() {
   const result = await request<{ brokers: any[] }>("/api/brokers");
   return result.brokers.map(mapBroker);
+}
+export function getCachedBrokers() {
+  return readLocalCache<BrokerRecord[]>(CACHE_KEYS.brokers);
+}
+export function getActiveBrokersWithCache() {
+  return serverFirstWithCache(CACHE_KEYS.brokers, getActiveBrokers);
 }
 export async function getActivePaymentMethods() {
   const result = await request<{ paymentMethods: any[] }>("/api/payment-methods");
@@ -363,6 +450,12 @@ export async function getOrderById(id: string) {
 export async function getOrdersForUser() {
   const result = await request<{ orders: any[] }>("/api/orders");
   return result.orders.map(mapOrder);
+}
+export function getCachedOrdersForUser(userId: string) {
+  return readLocalCache<OrderRecord[]>(CACHE_KEYS.userOrders(userId));
+}
+export function getOrdersForUserWithCache(userId: string) {
+  return serverFirstWithCache(CACHE_KEYS.userOrders(userId), getOrdersForUser);
 }
 export async function submitPaymentForOrder(input: {
   orderId: string;

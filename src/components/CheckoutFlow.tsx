@@ -9,7 +9,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   approveOrderForAdmin,
@@ -20,7 +20,7 @@ import {
   deleteAdminBroker,
   deleteAdminPaymentMethod,
   deleteAdminPlan,
-  getActiveBrokers,
+  getActiveBrokersWithCache,
   getActivePaymentMethods,
   getAdminBrokers,
   getAdminPaymentMethods,
@@ -30,9 +30,10 @@ import {
   getCurrentUser,
   getFundedAccountForOrder,
   getOrderById,
-  getOrdersForUser,
+  getCachedOrdersForUser,
+  getOrdersForUserWithCache,
   getPaymentMethodById,
-  getPlanById,
+  getPlanByIdWithCache,
   getUsersForAdmin,
   loginUser,
   rejectOrderForAdmin,
@@ -46,7 +47,7 @@ import {
   type PlanRecord,
   type PublicUser,
 } from "@/lib/backend";
-import { Layout } from "./QxtSite";
+import { Layout, SyncNotice } from "./QxtSite";
 
 const apiOrigin = import.meta.env["VITE_API_URL"] || "http://localhost:3000";
 function normalizeRouteValue(value: string | number | undefined | null) {
@@ -231,17 +232,18 @@ export function BrokerSelectionPage() {
   const [brokers, setBrokers] = useState<BrokerRecord[]>([]);
   const [loadingBrokers, setLoadingBrokers] = useState(true);
   const [error, setError] = useState("");
+  const [stale, setStale] = useState(false);
   const navigate = useNavigate();
 
   const loadBrokers = async () => {
     setLoadingBrokers(true);
     setError("");
     try {
-      const loaded = await getActiveBrokers();
-      setBrokers(loaded);
+      const result = await getActiveBrokersWithCache();
+      setBrokers(result.data);
+      setStale(result.source === "cache");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to load brokers.");
-      setBrokers([]);
     } finally {
       setLoadingBrokers(false);
     }
@@ -290,6 +292,7 @@ export function BrokerSelectionPage() {
         )}
       </div>
       {error && <p className="mt-5 text-sm text-destructive">{error}</p>}
+      {stale && <SyncNotice kind="brokers" />}
       {error && (
         <button type="button" className="btn-secondary mt-3" onClick={() => void loadBrokers()}>
           Retry
@@ -446,13 +449,19 @@ export function PaymentDetailsPage() {
   const [brokers, setBrokers] = useState<BrokerRecord[]>([]);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
+  const [stale, setStale] = useState(false);
   const navigate = useNavigate();
   useEffect(() => {
-    Promise.all([getPaymentMethodById(methodId), getPlanById(planId), getActiveBrokers()])
-      .then(([paymentMethod, selectedPlan, activeBrokers]) => {
+    Promise.all([
+      getPaymentMethodById(methodId),
+      getPlanByIdWithCache(planId),
+      getActiveBrokersWithCache(),
+    ])
+      .then(([paymentMethod, selectedPlan, brokerResult]) => {
         setMethod(paymentMethod);
         setPlan(selectedPlan);
-        setBrokers(activeBrokers);
+        setBrokers(brokerResult.data);
+        setStale(brokerResult.source === "cache");
       })
       .catch((caught) =>
         setError(caught instanceof Error ? caught.message : "Unable to load payment details."),
@@ -572,6 +581,7 @@ export function PaymentDetailsPage() {
           </p>
         </div>
       </div>
+      {stale && <SyncNotice kind="brokers" />}
     </FlowShell>
   );
 }
@@ -683,29 +693,57 @@ export function PaymentProofPage() {
 export function UserOrdersDashboardPage() {
   const { user, loading } = useUser();
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [ordersError, setOrdersError] = useState("");
+  const [ordersStale, setOrdersStale] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<
     Record<string, { email: string; password: string }>
   >({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const ordersRequest = useRef(0);
+  const ordersInFlight = useRef(false);
 
   const loadOrders = async () => {
-    if (!user) return;
-    const loaded = await getOrdersForUser();
-    setOrders(loaded);
+    if (!user || ordersInFlight.current) return;
+    ordersInFlight.current = true;
+    const requestId = ++ordersRequest.current;
+    setOrdersError("");
+    try {
+      const result = await getOrdersForUserWithCache(user.id);
+      if (requestId !== ordersRequest.current) return;
+      setOrders(result.data);
+      setOrdersStale(result.source === "cache");
+    } catch (caught) {
+      if (requestId !== ordersRequest.current) return;
+      setOrdersError(caught instanceof Error ? caught.message : "Unable to load your orders.");
+    } finally {
+      if (requestId === ordersRequest.current) {
+        setOrdersLoading(false);
+        ordersInFlight.current = false;
+      }
+    }
   };
 
   useEffect(() => {
-    if (user) void loadOrders();
+    if (!user) return;
+    const cached = getCachedOrdersForUser(user.id);
+    if (cached) {
+      setOrders(cached.data);
+      setOrdersLoading(false);
+    }
+    void loadOrders();
   }, [user]);
 
   useEffect(() => {
     if (!orders.length) return;
+    const firstOrder = orders[0];
+    if (!firstOrder) return;
     const savedOrderId =
       typeof window !== "undefined" ? localStorage.getItem("qxt-selected-order") : null;
     const nextOrderId = orders.some((order) => order.id === savedOrderId)
       ? savedOrderId
-      : orders[0].id;
+      : firstOrder.id;
     setSelectedOrderId(nextOrderId);
     if (typeof window !== "undefined" && nextOrderId)
       localStorage.setItem("qxt-selected-order", nextOrderId);
@@ -745,8 +783,19 @@ export function UserOrdersDashboardPage() {
         <div className="container-x">
           <p className="eyebrow">Trader dashboard</p>
           <h1 className="mt-4 text-4xl font-semibold">My Orders</h1>
+          {ordersStale && <SyncNotice kind="orders" />}
+          {ordersError && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-destructive">
+              <span>{ordersError}</span>
+              <button type="button" className="btn-secondary" onClick={() => void loadOrders()}>
+                Retry
+              </button>
+            </div>
+          )}
           <div className="mt-8 grid gap-4">
-            {orders.length === 0 ? (
+            {ordersLoading && orders.length === 0 ? (
+              <div className="order-card text-muted-foreground">Loading your orders...</div>
+            ) : orders.length === 0 ? (
               <div className="order-card text-muted-foreground">
                 No orders yet. Choose an account to get started.
               </div>

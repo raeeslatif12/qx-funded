@@ -21,11 +21,17 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { brokers, challengePlans, faqs, instantPlans, reviews, type Plan } from "@/lib/qxt-data";
 import {
+  getActiveBrokersWithCache,
   getCurrentUser,
+  getCachedBrokers,
+  getCachedPlans,
+  getPlansWithCache,
   loginUser,
   logoutUser,
   registerUser,
   updateAccountSettings,
+  type BrokerRecord,
+  type PlanRecord,
 } from "@/lib/backend";
 import type { LegalDocument } from "@/lib/qxt-legal-data";
 
@@ -44,6 +50,72 @@ function getUserInitials(name?: string | null) {
   const first = parts[0]?.[0]?.toUpperCase() || "";
   const last = parts.length > 1 ? parts[parts.length - 1]?.[0]?.toUpperCase() || "" : first;
   return `${first}${last}`.slice(0, 2);
+}
+
+const fallbackPlans: Plan[] = [...instantPlans, ...challengePlans];
+const fallbackBrokers: BrokerRecord[] = brokers.map((broker) => ({
+  id: broker.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  name: broker.name,
+  enabled: true,
+  image: broker.image,
+  copy: broker.copy,
+}));
+
+function usePublicPlans() {
+  const [plans, setPlans] = useState<Plan[]>(() => getCachedPlans()?.data || fallbackPlans);
+  const [stale, setStale] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getPlansWithCache()
+      .then((result) => {
+        if (!active) return;
+        setPlans(result.data as PlanRecord[]);
+        setStale(result.source === "cache");
+      })
+      .catch(() => {
+        if (active) setStale(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return { plans, stale };
+}
+
+function usePublicBrokers() {
+  const [brokerList, setBrokerList] = useState<BrokerRecord[]>(
+    () => getCachedBrokers()?.data || fallbackBrokers,
+  );
+  const [stale, setStale] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getActiveBrokersWithCache()
+      .then((result) => {
+        if (!active) return;
+        setBrokerList(result.data);
+        setStale(result.source === "cache");
+      })
+      .catch(() => {
+        if (active) setStale(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return { brokers: brokerList, stale };
+}
+
+export function SyncNotice({ kind }: { kind: "plans" | "brokers" | "orders" }) {
+  const label = kind === "orders" ? "orders" : kind;
+  return (
+    <p className="mt-4 text-xs text-amber-300">
+      Showing saved {label}. Refresh to sync when the backend reconnects.
+    </p>
+  );
 }
 
 export function Logo() {
@@ -443,6 +515,8 @@ export function SectionHead({
 }
 
 export function HomePage() {
+  const { plans, stale: plansStale } = usePublicPlans();
+  const { brokers: brokerList, stale: brokersStale } = usePublicBrokers();
   return (
     <Layout>
       <section className="hero-grid relative overflow-hidden">
@@ -500,10 +574,11 @@ export function HomePage() {
               View all accounts <ArrowRight size={15} />
             </Link>
           </div>
-          <PlanGrid plans={instantPlans.slice(0, 4)} />
+          <PlanGrid plans={plans.filter((plan) => plan.type === "Instant").slice(0, 4)} />
+          {plansStale && <SyncNotice kind="plans" />}
         </div>
       </section>
-      <BrokersStrip />
+      <BrokersStrip brokers={brokerList} stale={brokersStale} />
       <ReviewsSection />
       <FaqSection limit={4} />
       <Cta />
@@ -595,13 +670,13 @@ export function PlanGrid({ plans }: { plans: Plan[] }) {
   );
 }
 
-function BrokersStrip() {
+function BrokersStrip({ brokers: brokerList, stale }: { brokers: BrokerRecord[]; stale: boolean }) {
   return (
     <section className="section bg-surface">
       <div className="container-x">
         <SectionHead eyebrow="Trading Environments" title="Trade on platforms you already know" />
         <div className="mt-9 grid grid-cols-2 gap-3 md:grid-cols-5">
-          {brokers.map((b) => (
+          {brokerList.map((b) => (
             <div className="broker-tile" key={b.name}>
               <img src={b.image} alt="" />
               <b>{b.name}</b>
@@ -612,6 +687,7 @@ function BrokersStrip() {
             </div>
           ))}
         </div>
+        {stale && <SyncNotice kind="brokers" />}
       </div>
     </section>
   );
@@ -743,6 +819,7 @@ export function StandardHero({
 }
 export function AccountsPage() {
   const [tab, setTab] = useState<"instant" | "challenge">("instant");
+  const { plans, stale } = usePublicPlans();
   return (
     <Layout>
       <StandardHero
@@ -763,7 +840,12 @@ export function AccountsPage() {
               Challenge Accounts
             </button>
           </div>
-          <PlanGrid plans={tab === "instant" ? instantPlans : challengePlans} />
+          <PlanGrid
+            plans={plans.filter(
+              (plan) => plan.type === (tab === "instant" ? "Instant" : "Challenge"),
+            )}
+          />
+          {stale && <SyncNotice kind="plans" />}
           <p className="mt-8 text-xs leading-6 text-muted-foreground">
             All accounts run on simulated evaluation environments. Profit splits are paid from firm
             capital once an account reaches funded status.
@@ -774,6 +856,7 @@ export function AccountsPage() {
   );
 }
 export function BrokersPage() {
+  const { brokers: brokerList, stale } = usePublicBrokers();
   return (
     <Layout>
       <StandardHero
@@ -783,7 +866,7 @@ export function BrokersPage() {
       />
       <section className="section pt-0">
         <div className="container-x grid gap-4 md:grid-cols-2">
-          {brokers.map((b) => (
+          {brokerList.map((b) => (
             <article key={b.name} className="broker-card">
               <div className="flex items-center justify-between">
                 <img src={b.image} alt="" />
@@ -800,6 +883,7 @@ export function BrokersPage() {
             </article>
           ))}
         </div>
+        {stale && <SyncNotice kind="brokers" />}
       </section>
     </Layout>
   );
