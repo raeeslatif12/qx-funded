@@ -11,8 +11,10 @@ test("admin route files exist for dedicated admin dashboard and login page", () 
   assert.equal(existsSync(adminLoginFile), true, "Missing /admin-dashboard/login route component");
 });
 
-test("backend migration seeds the required admin account credentials", () => {
+test("backend migration requires explicit admin account credentials", () => {
   const content = readFileSync(migrateFile, "utf8");
-  assert.match(content, /admin@gmail\.com/i);
-  assert.match(content, /admin/i);
+  assert.match(content, /ADMIN_EMAIL/);
+  assert.match(content, /ADMIN_PASSWORD/);
+  assert.doesNotMatch(content, /admin@gmail\.com/i);
+  assert.doesNotMatch(content, /\|\|\s*["']admin["']/i);
 });

@@ -49,7 +49,7 @@ import {
 } from "@/lib/backend";
 import { Layout, SyncNotice } from "./QxtSite";
 
-const apiOrigin = import.meta.env["VITE_API_URL"] || "http://localhost:3000";
+const apiOrigin = "";
 function normalizeRouteValue(value: string | number | undefined | null) {
   return String(value ?? "").replace(/^['"]+|['"]+$/g, "");
 }
@@ -733,6 +733,13 @@ export function UserOrdersDashboardPage() {
       setOrdersLoading(false);
     }
     void loadOrders();
+    const retry = () => void loadOrders();
+    window.addEventListener("online", retry);
+    const interval = window.setInterval(retry, 15000);
+    return () => {
+      window.removeEventListener("online", retry);
+      window.clearInterval(interval);
+    };
   }, [user]);
 
   useEffect(() => {

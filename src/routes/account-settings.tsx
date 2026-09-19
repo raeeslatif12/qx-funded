@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
-import { getCurrentUser, updateAccountSettings } from "@/lib/backend";
+import { getCurrentUser, updateAccountSettingsWithFallback } from "@/lib/backend";
 import { Layout } from "@/components/QxtSite";
 
 export const Route = createFileRoute("/account-settings")({
@@ -51,7 +51,8 @@ function AccountSettingsPage() {
     setError("");
     setMessage("");
 
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const nextName = String(form.get("name") || "").trim();
     const nextEmail = String(form.get("email") || "").trim();
     const currentPassword = String(form.get("currentPassword") || "").trim();
@@ -77,11 +78,11 @@ function AccountSettingsPage() {
         payload.currentPassword = currentPassword;
       }
 
-      const updatedUser = await updateAccountSettings(payload);
+      const updatedUser = await updateAccountSettingsWithFallback(payload);
       setMessage("Your account details were updated successfully.");
       setName(updatedUser.name);
       setEmail(updatedUser.email);
-      event.currentTarget.reset();
+      formElement.reset();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to update your account.");
     } finally {

@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { brokers, challengePlans, faqs, instantPlans, reviews, type Plan } from "@/lib/qxt-data";
 import {
   getActiveBrokersWithCache,
+  getConnectionMode,
   getCurrentUser,
   getCachedBrokers,
   getCachedPlans,
@@ -29,6 +30,7 @@ import {
   loginUser,
   logoutUser,
   registerUser,
+  subscribeConnectionMode,
   updateAccountSettings,
   type BrokerRecord,
   type PlanRecord,
@@ -67,17 +69,24 @@ function usePublicPlans() {
 
   useEffect(() => {
     let active = true;
-    getPlansWithCache()
-      .then((result) => {
-        if (!active) return;
-        setPlans(result.data as PlanRecord[]);
-        setStale(result.source === "cache");
-      })
-      .catch(() => {
-        if (active) setStale(true);
-      });
+    const syncPlans = () =>
+      getPlansWithCache()
+        .then((result) => {
+          if (!active) return;
+          setPlans(result.data as PlanRecord[]);
+          setStale(result.source === "cache");
+        })
+        .catch(() => {
+          if (active) setStale(true);
+        });
+    void syncPlans();
+    const retry = () => void syncPlans();
+    window.addEventListener("online", retry);
+    const interval = window.setInterval(retry, 15000);
     return () => {
       active = false;
+      window.removeEventListener("online", retry);
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -92,17 +101,24 @@ function usePublicBrokers() {
 
   useEffect(() => {
     let active = true;
-    getActiveBrokersWithCache()
-      .then((result) => {
-        if (!active) return;
-        setBrokerList(result.data);
-        setStale(result.source === "cache");
-      })
-      .catch(() => {
-        if (active) setStale(true);
-      });
+    const syncBrokers = () =>
+      getActiveBrokersWithCache()
+        .then((result) => {
+          if (!active) return;
+          setBrokerList(result.data);
+          setStale(result.source === "cache");
+        })
+        .catch(() => {
+          if (active) setStale(true);
+        });
+    void syncBrokers();
+    const retry = () => void syncBrokers();
+    window.addEventListener("online", retry);
+    const interval = window.setInterval(retry, 15000);
     return () => {
       active = false;
+      window.removeEventListener("online", retry);
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -343,9 +359,17 @@ export function GoldLink({
 }
 
 export function Layout({ children, minimal = false }: { children: ReactNode; minimal?: boolean }) {
+  const [mode, setMode] = useState(getConnectionMode);
+  useEffect(() => subscribeConnectionMode(setMode), []);
   return (
     <div className="min-h-screen bg-background text-foreground">
       {!minimal && <Header />}
+      {mode === "local" && (
+        <div className="fixed inset-x-0 top-16 z-30 border-b border-amber-400/30 bg-amber-400/10 px-4 py-2 text-center text-xs text-amber-200">
+          LOCAL MODE · Saved data and local accounts are active. Payments and admin actions require
+          the backend.
+        </div>
+      )}
       <main className={minimal ? "" : "pt-16"}>{children}</main>
       {!minimal && <Footer />}
       {!minimal && <CookieBanner />}

@@ -191,6 +191,12 @@ const paymentMethods = [
 ];
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
+if (!adminEmail || !adminPassword) {
+  throw new Error("ADMIN_EMAIL and ADMIN_PASSWORD are required for database setup.");
+}
 
 async function ensureOrderColumns() {
   const columns = await pool.query(
@@ -251,7 +257,7 @@ try {
     popular,
   ] of plans) {
     await pool.query(
-      `INSERT INTO plans (id, type, size, price, daily_loss, target, drawdown, description, features, popular) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO UPDATE SET price=EXCLUDED.price, daily_loss=EXCLUDED.daily_loss, target=EXCLUDED.target, drawdown=EXCLUDED.drawdown, description=EXCLUDED.description, features=EXCLUDED.features, popular=EXCLUDED.popular, updated_at=now()`,
+      `INSERT INTO plans (id, type, size, price, daily_loss, target, drawdown, description, features, popular) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`,
       [
         id,
         type,
@@ -268,13 +274,13 @@ try {
   }
   for (const [id, name, image, copy] of brokers) {
     await pool.query(
-      `INSERT INTO brokers (id, name, image, copy) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, image=EXCLUDED.image, copy=EXCLUDED.copy, updated_at=now()`,
+      `INSERT INTO brokers (id, name, image, copy) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING`,
       [id, name, image, copy],
     );
   }
   for (const [id, name, network, address] of paymentMethods) {
     await pool.query(
-      `INSERT INTO payment_methods (id, name, network, deposit_address, qr_data, instructions) VALUES ($1,$2,$3,$4,$4,$5) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, network=EXCLUDED.network, updated_at=now()`,
+      `INSERT INTO payment_methods (id, name, network, deposit_address, qr_data, instructions) VALUES ($1,$2,$3,$4,$4,$5) ON CONFLICT (id) DO NOTHING`,
       [
         id,
         name,
@@ -284,15 +290,23 @@ try {
       ],
     );
   }
-  const adminEmail = (process.env.ADMIN_EMAIL || "admin@gmail.com").trim().toLowerCase();
-  const adminPassword = (process.env.ADMIN_PASSWORD || "admin").trim();
   const hash = await bcrypt.hash(adminPassword, 12);
   const result = await pool.query(
-    `INSERT INTO users (name, email, password_hash) VALUES ('Admin User', $1, $2) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash RETURNING id`,
+    `INSERT INTO users (name, email, password_hash) VALUES ('Admin User', $1, $2) ON CONFLICT (email) DO NOTHING RETURNING id`,
     [adminEmail, hash],
   );
+  const adminUser =
+    result.rows[0] ||
+    (await pool.query("SELECT id FROM users WHERE email=$1", [adminEmail])).rows[0];
+  if (!adminUser) throw new Error("Unable to initialize the configured admin user.");
+  if (process.env.RESET_ADMIN_PASSWORD === "true") {
+    await pool.query("UPDATE users SET password_hash=$1, updated_at=now() WHERE id=$2", [
+      hash,
+      adminUser.id,
+    ]);
+  }
   await pool.query("INSERT INTO admin_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", [
-    result.rows[0].id,
+    adminUser.id,
   ]);
   console.log("Database schema and seed complete.");
 } finally {

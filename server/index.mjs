@@ -6,12 +6,15 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import multer from "multer";
 import pg from "pg";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
+import { del as deleteBlob, get as getBlob, put as putBlob } from "@vercel/blob";
 
 const { Pool } = pg;
 const app = express();
-const port = Number(process.env.PORT || process.env.BACKEND_PORT || 3000);
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((value) => value.trim())
@@ -19,42 +22,69 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
 const localhostOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/i;
 const sessionSecret = process.env.SESSION_SECRET;
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || "./uploads");
+const nodeEnvironment = process.env.NODE_ENV || "development";
+const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+const useBlobStorage = Boolean(blobToken);
+const maxUploadBytes = Number(
+  process.env.MAX_UPLOAD_BYTES || (process.env.VERCEL ? 4 * 1024 * 1024 : 10 * 1024 * 1024),
+);
+const cookieSameSite = process.env.COOKIE_SAME_SITE || "lax";
+const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
 if (!process.env.DATABASE_URL || !sessionSecret)
   throw new Error("DATABASE_URL and SESSION_SECRET are required.");
-fs.mkdirSync(uploadDir, { recursive: true });
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
+if (!process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY)
+  throw new Error("FUNDED_ACCOUNT_ENCRYPTION_KEY is required.");
+if (nodeEnvironment === "production" && !blobToken)
+  throw new Error("BLOB_READ_WRITE_TOKEN is required in production.");
+if (!["lax", "strict", "none"].includes(cookieSameSite))
+  throw new Error("COOKIE_SAME_SITE must be lax, strict, or none.");
+if (cookieSameSite === "none" && nodeEnvironment !== "production")
+  throw new Error("SameSite=None cookies require production HTTPS.");
+if (!useBlobStorage) fs.mkdirSync(uploadDir, { recursive: true });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.PG_POOL_MAX || 10),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+  keepAlive: true,
+});
+pool.on("error", () => console.error("Unexpected idle PostgreSQL client error."));
+const upload = multer({
+  storage: useBlobStorage ? multer.memoryStorage() : multer.diskStorage({ destination: uploadDir }),
+  limits: { fileSize: maxUploadBytes, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    callback(null, isAllowedUpload(file));
+  },
+});
 
-async function ensureDefaultAdminUser() {
-  const adminEmail = (process.env.ADMIN_EMAIL || "admin@gmail.com").trim().toLowerCase();
-  const adminPassword = (process.env.ADMIN_PASSWORD || "admin").trim();
-  const hash = await bcrypt.hash(adminPassword, 12);
-  const result = await pool.query(
-    `INSERT INTO users (name, email, password_hash) VALUES ('Admin User', $1, $2) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, updated_at=now() RETURNING id`,
-    [adminEmail, hash],
+if (!process.env.VERCEL) {
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || frontendOrigins.includes(origin) || localhostOriginPattern.test(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
+      credentials: true,
+    }),
   );
-  await pool.query("INSERT INTO admin_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", [
-    result.rows[0].id,
-  ]);
 }
-
-await ensureDefaultAdminUser();
-
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || frontendOrigins.includes(origin) || localhostOriginPattern.test(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error(`CORS blocked for origin: ${origin}`));
-    },
-    credentials: true,
-  }),
-);
+app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
-app.use("/uploads", express.static(uploadDir));
+app.use(
+  "/api/auth",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "Too many authentication attempts. Please try again later." },
+  }),
+);
+if (!useBlobStorage) app.use("/uploads", express.static(uploadDir));
 
 function hashToken(token) {
   return crypto.createHmac("sha256", sessionSecret).update(token).digest("hex");
@@ -65,7 +95,7 @@ function createToken() {
 function encryptSecret(value) {
   const key = crypto
     .createHash("sha256")
-    .update(process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY || `${sessionSecret}-funded-accounts`)
+    .update(process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY)
     .digest();
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
@@ -79,7 +109,7 @@ function decryptSecret(value) {
   if (!ivHex || !encryptedHex || !tagHex) return "";
   const key = crypto
     .createHash("sha256")
-    .update(process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY || `${sessionSecret}-funded-accounts`)
+    .update(process.env.FUNDED_ACCOUNT_ENCRYPTION_KEY)
     .digest();
   const iv = Buffer.from(ivHex, "hex");
   const encrypted = Buffer.from(encryptedHex, "hex");
@@ -108,6 +138,45 @@ function publicUser(row) {
 }
 function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
+}
+
+const sessionCookieOptions = {
+  httpOnly: true,
+  sameSite: cookieSameSite,
+  secure: nodeEnvironment === "production",
+  domain: cookieDomain,
+  path: "/",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
+
+function isAllowedUpload(file) {
+  const extensionsByType = {
+    "image/jpeg": [".jpg", ".jpeg"],
+    "image/png": [".png"],
+    "image/webp": [".webp"],
+    "application/pdf": [".pdf"],
+  };
+  const extensions = extensionsByType[file.mimetype];
+  return Boolean(extensions?.includes(path.extname(file.originalname).toLowerCase()));
+}
+
+async function storePaymentProof(file, orderId) {
+  if (!isAllowedUpload(file)) throw new Error("Unsupported payment proof file type.");
+  if (useBlobStorage) {
+    const extension = path.extname(file.originalname).toLowerCase() || ".bin";
+    const blob = await putBlob(
+      `payment-proofs/${orderId}/${crypto.randomUUID()}${extension}`,
+      file.buffer,
+      {
+        access: "private",
+        addRandomSuffix: false,
+        contentType: file.mimetype,
+        token: blobToken,
+      },
+    );
+    return blob.url;
+  }
+  return `/uploads/${path.basename(file.path)}`;
 }
 
 async function auth(req, res, next) {
@@ -143,6 +212,10 @@ app.get("/health", async (_req, res) => {
   const result = await pool.query("SELECT 1 AS ok");
   res.json({ ok: result.rows[0].ok === 1, service: "qxt-api" });
 });
+app.get("/api/health", async (_req, res) => {
+  const result = await pool.query("SELECT 1 AS ok");
+  res.json({ ok: result.rows[0].ok === 1, service: "qxt-api" });
+});
 
 app.post("/api/auth/register", async (req, res, next) => {
   const { name, email, password } = req.body || {};
@@ -163,12 +236,7 @@ app.post("/api/auth/register", async (req, res, next) => {
       "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1,$2,now()+interval '7 days')",
       [result.rows[0].id, hashToken(token)],
     );
-    res.cookie("qxt_session", token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie("qxt_session", token, sessionCookieOptions);
     res.status(201).json({ user: publicUser({ ...result.rows[0], is_admin: false }) });
   } catch (error) {
     if (error.code === "23505")
@@ -196,12 +264,7 @@ app.post("/api/auth/login", async (req, res, next) => {
       "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1,$2,now()+interval '7 days')",
       [user.id, hashToken(token)],
     );
-    res.cookie("qxt_session", token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie("qxt_session", token, sessionCookieOptions);
     res.json({ user: publicUser(user) });
   } catch (error) {
     next(error);
@@ -212,7 +275,7 @@ app.post("/api/auth/logout", async (req, res, next) => {
   try {
     const token = req.cookies.qxt_session;
     if (token) await pool.query("DELETE FROM sessions WHERE token_hash=$1", [hashToken(token)]);
-    res.clearCookie("qxt_session");
+    res.clearCookie("qxt_session", sessionCookieOptions);
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -505,8 +568,8 @@ app.delete("/api/admin/payment-methods/:id", auth, adminOnly, async (req, res, n
   }
 });
 
-const orderSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true`;
-const orderDetailSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, fa.id AS funded_account_id, fa.account_email, fa.account_password_encrypted FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true LEFT JOIN funded_accounts fa ON fa.order_id=o.id`;
+const orderSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true`;
+const orderDetailSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, fa.id AS funded_account_id, fa.account_email, fa.account_password_encrypted FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true LEFT JOIN funded_accounts fa ON fa.order_id=o.id`;
 
 app.post("/api/orders", auth, async (req, res, next) => {
   const { planId, brokerId, paymentMethodId } = req.body || {};
@@ -615,12 +678,44 @@ app.get("/api/orders/:id/funded-account", auth, async (req, res, next) => {
   }
 });
 
+app.get("/api/orders/:id/payment-proof/:proofId", auth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT pp.storage_path, pp.original_name, pp.mime_type
+       FROM payment_proofs pp
+       JOIN payments p ON p.id=pp.payment_id
+       JOIN orders o ON o.id=p.order_id
+       WHERE pp.id=$1 AND o.id=$2 AND (o.user_id=$3 OR EXISTS(SELECT 1 FROM admin_users WHERE user_id=$3))`,
+      [req.params.proofId, req.params.id, req.user.id],
+    );
+    if (!result.rowCount) return jsonError(res, 404, "Payment proof not found.");
+    const proof = result.rows[0];
+    if (!useBlobStorage) {
+      const filename = path.basename(proof.storage_path);
+      return res.sendFile(filename, {
+        root: uploadDir,
+        headers: { "Content-Disposition": "inline" },
+      });
+    }
+    const blob = await getBlob(proof.storage_path, { access: "private", token: blobToken });
+    if (!blob || !blob.stream) return jsonError(res, 404, "Payment proof not found.");
+    res.status(200);
+    res.setHeader("Content-Type", proof.mime_type);
+    const safeFilename = path.basename(proof.original_name).replace(/[\r\n"]/g, "");
+    res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
+    return Readable.fromWeb(blob.stream).pipe(res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post(
   "/api/orders/:id/payment-proof",
   auth,
   upload.single("paymentProof"),
   async (req, res, next) => {
     if (!req.file) return jsonError(res, 400, "Payment screenshot is required.");
+    let storedProofPath;
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -633,7 +728,8 @@ app.post(
         return jsonError(res, 404, "Order not found.");
       }
       const order = found.rows[0];
-      const proofPath = `/uploads/${path.basename(req.file.path)}`;
+      const proofPath = await storePaymentProof(req.file, req.params.id);
+      storedProofPath = proofPath;
       await client.query(
         "INSERT INTO payment_proofs (payment_id,storage_path,original_name,mime_type,size_bytes) VALUES ($1,$2,$3,$4,$5)",
         [order.payment_id, proofPath, req.file.originalname, req.file.mimetype, req.file.size],
@@ -651,6 +747,10 @@ app.post(
       res.status(201).json({ status: "pending_verification" });
     } catch (error) {
       await client.query("ROLLBACK");
+      if (!useBlobStorage && req.file?.path)
+        await fs.promises.unlink(req.file.path).catch(() => undefined);
+      if (useBlobStorage && storedProofPath)
+        await deleteBlob(storedProofPath, { token: blobToken }).catch(() => undefined);
       next(error);
     } finally {
       client.release();
@@ -703,7 +803,7 @@ app.patch("/api/admin/payment-methods/:id", auth, adminOnly, async (req, res, ne
 app.get("/api/admin/orders", auth, adminOnly, async (_req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, u.name AS user_name, u.email AS user_email FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true ORDER BY o.created_at DESC`,
+      `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, u.name AS user_name, u.email AS user_email FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true ORDER BY o.created_at DESC`,
     );
     res.json({ orders: result.rows });
   } catch (error) {
@@ -787,14 +887,14 @@ async function rejectOrder(req, res, next) {
 }
 
 async function approveOrder(req, res, next) {
+  const accountEmail = String(req.body?.accountEmail || "").trim();
+  const accountPassword = String(req.body?.accountPassword || "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accountEmail))
+    return jsonError(res, 400, "A valid account email is required.");
+  if (!accountPassword) return jsonError(res, 400, "An account password is required.");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const accountEmail = String(req.body?.accountEmail || "").trim();
-    const accountPassword = String(req.body?.accountPassword || "").trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accountEmail))
-      return jsonError(res, 400, "A valid account email is required.");
-    if (!accountPassword) return jsonError(res, 400, "An account password is required.");
     const found = await client.query(
       "SELECT o.*, p.id AS payment_id FROM orders o JOIN payments p ON p.order_id=o.id WHERE o.id=$1 FOR UPDATE",
       [req.params.id],
@@ -851,13 +951,19 @@ app.patch("/api/admin/orders/:id/reject", auth, adminOnly, (req, res, next) =>
 );
 
 app.use((error, _req, res, _next) => {
-  console.error(error);
-  const message =
-    process.env.NODE_ENV === "production"
-      ? "Internal server error."
-      : error instanceof Error
-        ? error.message
-        : "Internal server error.";
-  res.status(500).json({ error: message });
+  if (error instanceof multer.MulterError) {
+    return res
+      .status(400)
+      .json({ error: "Payment proof upload is invalid or exceeds the configured size limit." });
+  }
+  if (nodeEnvironment === "production") {
+    console.error("API request failed.");
+    return res.status(500).json({ error: "Internal server error." });
+  }
+  console.error(error instanceof Error ? error.message : "Unknown API error.");
+  return res.status(500).json({
+    error: error instanceof Error ? error.message : "Internal server error.",
+  });
 });
-app.listen(port, () => console.log(`QXT API listening on http://localhost:${port}`));
+export default app;
+export { app };

@@ -88,7 +88,39 @@ export type FundedAccount = {
   createdAt: string;
 };
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+export type ConnectionMode = "server" | "local";
+export type ApiFailureKind = "network" | "timeout" | "http";
+
+export class ApiError extends Error {
+  readonly kind: ApiFailureKind;
+  readonly status?: number;
+
+  constructor(message: string, kind: ApiFailureKind, status?: number) {
+    super(message);
+    this.name = "ApiError";
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+type LocalAccountRecord = {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  salt: string;
+  createdAt: string;
+};
+
+const LOCAL_ACCOUNTS_KEY = "qxt-local-accounts";
+const LOCAL_SESSION_KEY = "qxt-local-session";
+const PENDING_PROFILE_KEY = "qxt-pending-profile-update";
+let connectionMode: ConnectionMode = "server";
+const connectionModeListeners = new Set<(mode: ConnectionMode) => void>();
+const inFlightRequests = new Map<string, Promise<CacheResult<unknown>>>();
+let pendingProfileSync: Promise<void> | null = null;
+
+const API_URL = "";
 const BACKEND_REQUEST_TIMEOUT_MS = 8000;
 
 export type CacheResult<T> = {
@@ -101,8 +133,203 @@ const CACHE_VERSION = 1;
 export const CACHE_KEYS = {
   plans: "qxt-cache-plans",
   brokers: "qxt-cache-brokers",
+  userProfile: "qxt-cache-user-profile",
   userOrders: (userId: string) => `qxt-cache-orders-${userId}`,
 } as const;
+
+export function getConnectionMode() {
+  return connectionMode;
+}
+
+export function subscribeConnectionMode(listener: (mode: ConnectionMode) => void) {
+  connectionModeListeners.add(listener);
+  return () => {
+    connectionModeListeners.delete(listener);
+  };
+}
+
+function setConnectionMode(mode: ConnectionMode) {
+  if (connectionMode === mode) return;
+  connectionMode = mode;
+  connectionModeListeners.forEach((listener) => listener(mode));
+}
+
+function readLocalAccounts(): LocalAccountRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LOCAL_ACCOUNTS_KEY) || "[]");
+    return Array.isArray(parsed) ? (parsed as LocalAccountRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalAccounts(accounts: LocalAccountRecord[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch {
+    // Local mode remains best effort when browser storage is unavailable.
+  }
+}
+
+function toPublicLocalUser(account: LocalAccountRecord): PublicUser {
+  return {
+    id: account.id,
+    name: account.name,
+    email: account.email,
+    accountStatus: "active",
+    admin: false,
+    createdAt: account.createdAt,
+  };
+}
+
+export function getLocalSession(): PublicUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const session = JSON.parse(window.localStorage.getItem(LOCAL_SESSION_KEY) || "null");
+    if (!session || typeof session.id !== "string" || typeof session.email !== "string")
+      return null;
+    return session as PublicUser;
+  } catch {
+    return null;
+  }
+}
+
+type CachedUserProfile = Omit<PublicUser, "admin"> & { admin: false };
+
+function cacheUserProfile(user: PublicUser) {
+  if (!user.admin) {
+    writeLocalCache<CachedUserProfile>(CACHE_KEYS.userProfile, { ...user, admin: false });
+  }
+}
+
+function getCachedUserProfile() {
+  return readLocalCache<CachedUserProfile>(CACHE_KEYS.userProfile);
+}
+
+type PendingProfileUpdate = {
+  userId: string;
+  name?: string;
+  email?: string;
+};
+
+function getPendingProfileUpdate() {
+  return readLocalCache<PendingProfileUpdate>(PENDING_PROFILE_KEY)?.data || null;
+}
+
+function clearPendingProfileUpdate() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(PENDING_PROFILE_KEY);
+  } catch {
+    // Storage cleanup is best effort.
+  }
+}
+
+async function syncPendingProfile(user: PublicUser) {
+  const pending = getPendingProfileUpdate();
+  if (!pending || pending.userId !== user.id || pendingProfileSync) return;
+  pendingProfileSync = updateAccountSettings(pending)
+    .then((updatedUser) => {
+      cacheUserProfile(updatedUser);
+      clearPendingProfileUpdate();
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      pendingProfileSync = null;
+    });
+}
+
+function setLocalSession(user: PublicUser | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (user) window.localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(user));
+    else window.localStorage.removeItem(LOCAL_SESSION_KEY);
+  } catch {
+    // Session persistence is best effort; the current page still has its user state.
+  }
+}
+
+export function isLocalUser(user: PublicUser | null | undefined) {
+  return Boolean(user?.id.startsWith("local-user-"));
+}
+
+async function hashLocalPassword(password: string, salt: string) {
+  const bytes = new TextEncoder().encode(`${salt}:${password}`);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function localSalt() {
+  return globalThis.crypto.randomUUID();
+}
+
+async function createLocalAccount(input: { name: string; email: string; password: string }) {
+  const email = input.email.trim().toLowerCase();
+  const accounts = readLocalAccounts();
+  if (accounts.some((account) => account.email === email)) {
+    throw new Error("An account with that email already exists locally.");
+  }
+  const salt = localSalt();
+  const account: LocalAccountRecord = {
+    id: `local-user-${globalThis.crypto.randomUUID()}`,
+    name: input.name.trim(),
+    email,
+    passwordHash: await hashLocalPassword(input.password, salt),
+    salt,
+    createdAt: new Date().toISOString(),
+  };
+  writeLocalAccounts([...accounts, account]);
+  const user = toPublicLocalUser(account);
+  setLocalSession(user);
+  setConnectionMode("local");
+  return user;
+}
+
+async function loginLocalAccount(emailInput: string, password: string) {
+  const email = emailInput.trim().toLowerCase();
+  const account = readLocalAccounts().find((entry) => entry.email === email);
+  if (!account || (await hashLocalPassword(password, account.salt)) !== account.passwordHash) {
+    throw new Error("Invalid local email or password.");
+  }
+  const user = toPublicLocalUser(account);
+  setLocalSession(user);
+  setConnectionMode("local");
+  return user;
+}
+
+async function updateLocalAccount(input: {
+  name?: string;
+  email?: string;
+  password?: string;
+  currentPassword?: string;
+}) {
+  const session = getLocalSession();
+  if (!session || !isLocalUser(session)) throw new Error("Local account session not found.");
+  const accounts = readLocalAccounts();
+  const index = accounts.findIndex((account) => account.id === session.id);
+  const account = accounts[index];
+  if (!account) throw new Error("Local account was not found.");
+  const nextEmail = input.email?.trim().toLowerCase() || account.email;
+  if (accounts.some((entry, entryIndex) => entryIndex !== index && entry.email === nextEmail)) {
+    throw new Error("An account with that email already exists locally.");
+  }
+  const nextAccount = { ...account, name: input.name?.trim() || account.name, email: nextEmail };
+  if (input.password) {
+    if (!input.currentPassword) throw new Error("Your current password is required.");
+    const currentHash = await hashLocalPassword(input.currentPassword, account.salt);
+    if (currentHash !== account.passwordHash) throw new Error("Current password is incorrect.");
+    nextAccount.salt = localSalt();
+    nextAccount.passwordHash = await hashLocalPassword(input.password, nextAccount.salt);
+  }
+  accounts[index] = nextAccount;
+  writeLocalAccounts(accounts);
+  const user = toPublicLocalUser(nextAccount);
+  setLocalSession(user);
+  setConnectionMode("local");
+  return user;
+}
 
 type CacheEnvelope<T> = {
   version: number;
@@ -143,15 +370,23 @@ async function serverFirstWithCache<T>(
   key: string,
   loader: () => Promise<T>,
 ): Promise<CacheResult<T>> {
-  try {
-    const data = await loader();
-    writeLocalCache(key, data);
-    return { data, source: "server" };
-  } catch (error) {
-    const cached = readLocalCache<T>(key);
-    if (cached) return { data: cached.data, source: "cache", cachedAt: cached.cachedAt };
-    throw error;
-  }
+  const existing = inFlightRequests.get(key) as Promise<CacheResult<T>> | undefined;
+  if (existing) return existing;
+  const pending = (async () => {
+    try {
+      const data = await loader();
+      writeLocalCache(key, data);
+      return { data, source: "server" } as CacheResult<T>;
+    } catch (error) {
+      const cached = readLocalCache<T>(key);
+      if (cached) return { data: cached.data, source: "cache", cachedAt: cached.cachedAt };
+      throw error;
+    } finally {
+      inFlightRequests.delete(key);
+    }
+  })();
+  inFlightRequests.set(key, pending as Promise<CacheResult<unknown>>);
+  return pending;
 }
 
 function normalizePlainText(value: unknown): string {
@@ -172,25 +407,42 @@ async function request<T>(path: string, options: RequestInit = {}) {
         ...options.headers,
       },
     });
+    setConnectionMode(getLocalSession() ? "local" : "server");
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.error || `Request failed (${response.status})`);
+      throw new ApiError(
+        body.error || `Request failed (${response.status})`,
+        "http",
+        response.status,
+      );
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("The QXT API request timed out. Please try again.");
+      setConnectionMode("local");
+      throw new ApiError("The QXT API request timed out. Please try again.", "timeout");
     }
-    if (error instanceof TypeError && error.message === "Failed to fetch") {
-      throw new Error(
+    if (error instanceof TypeError) {
+      setConnectionMode("local");
+      throw new ApiError(
         "Unable to reach the QXT API. Start the backend server and check that the frontend origin is allowed.",
+        "network",
       );
     }
     throw error;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export function isBackendUnavailable(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    (error.kind === "network" ||
+      error.kind === "timeout" ||
+      [502, 503, 504].includes(error.status || 0))
+  );
 }
 
 function mapPlan(row: any): PlanRecord {
@@ -252,7 +504,9 @@ function mapOrder(row: any): OrderRecord {
     createdAt: row.created_at ?? row.createdAt,
     updatedAt: row.updated_at ?? row.updatedAt,
     transactionHash: row.transaction_id ?? row.transactionHash,
-    paymentProof: row.payment_proof ?? row.paymentProof,
+    paymentProof: row.payment_proof
+      ? `/api/orders/${encodeURIComponent(normalizePlainText(row.id))}/payment-proof/${encodeURIComponent(normalizePlainText(row.payment_proof_id))}`
+      : row.paymentProof,
     paymentProofName: row.payment_proof_name,
   };
 }
@@ -260,17 +514,38 @@ function mapOrder(row: any): OrderRecord {
 export async function getCurrentUser() {
   try {
     const result = await request<{ user: PublicUser }>("/api/auth/me");
+    setLocalSession(null);
+    setConnectionMode("server");
+    cacheUserProfile(result.user);
+    void syncPendingProfile(result.user);
     return result.user;
-  } catch {
+  } catch (error) {
+    const localSession = getLocalSession();
+    if (isBackendUnavailable(error)) {
+      if (localSession) setConnectionMode("local");
+      if (localSession) return localSession;
+      const cachedProfile = getCachedUserProfile();
+      if (cachedProfile) {
+        setConnectionMode("local");
+        return cachedProfile.data;
+      }
+    }
     return null;
   }
 }
 export async function registerUser(input: { name: string; email: string; password: string }) {
-  const result = await request<{ user: PublicUser }>("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return result.user;
+  try {
+    const result = await request<{ user: PublicUser }>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    setLocalSession(null);
+    setConnectionMode("server");
+    return result.user;
+  } catch (error) {
+    if (!isBackendUnavailable(error)) throw error;
+    return createLocalAccount(input);
+  }
 }
 export async function updateAccountSettings(input: {
   name?: string;
@@ -284,15 +559,60 @@ export async function updateAccountSettings(input: {
   });
   return result.user;
 }
+export async function updateAccountSettingsWithFallback(input: {
+  name?: string;
+  email?: string;
+  password?: string;
+  currentPassword?: string;
+}) {
+  if (isLocalUser(getLocalSession())) return updateLocalAccount(input);
+  try {
+    return await updateAccountSettings(input);
+  } catch (error) {
+    if (!isBackendUnavailable(error)) throw error;
+    if (input.password) throw new Error("Password changes require the backend.");
+    const cached = getCachedUserProfile();
+    if (!cached) throw error;
+    const nextEmail = input.email?.trim().toLowerCase() || cached.data.email;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      throw new Error("Please enter a valid email address.");
+    }
+    const updatedProfile: CachedUserProfile = {
+      ...cached.data,
+      name: input.name?.trim() || cached.data.name,
+      email: nextEmail,
+      admin: false,
+    };
+    writeLocalCache(CACHE_KEYS.userProfile, updatedProfile);
+    writeLocalCache<PendingProfileUpdate>(PENDING_PROFILE_KEY, {
+      userId: cached.data.id,
+      name: updatedProfile.name,
+      email: updatedProfile.email,
+    });
+    setConnectionMode("local");
+    return updatedProfile;
+  }
+}
 export async function loginUser(input: { email: string; password: string }) {
-  const result = await request<{ user: PublicUser }>("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return result.user;
+  try {
+    const result = await request<{ user: PublicUser }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    setLocalSession(null);
+    setConnectionMode("server");
+    return result.user;
+  } catch (error) {
+    if (!isBackendUnavailable(error)) throw error;
+    return loginLocalAccount(input.email, input.password);
+  }
 }
 export async function logoutUser() {
-  await request<void>("/api/auth/logout", { method: "POST" });
+  try {
+    await request<void>("/api/auth/logout", { method: "POST" });
+  } finally {
+    setLocalSession(null);
+  }
 }
 export async function getPlans() {
   const result = await request<{ plans: any[] }>("/api/plans");
@@ -455,6 +775,12 @@ export function getCachedOrdersForUser(userId: string) {
   return readLocalCache<OrderRecord[]>(CACHE_KEYS.userOrders(userId));
 }
 export function getOrdersForUserWithCache(userId: string) {
+  if (isLocalUser(getLocalSession())) {
+    return Promise.resolve({
+      data: getCachedOrdersForUser(userId)?.data || [],
+      source: "cache",
+    } satisfies CacheResult<OrderRecord[]>);
+  }
   return serverFirstWithCache(CACHE_KEYS.userOrders(userId), getOrdersForUser);
 }
 export async function submitPaymentForOrder(input: {
