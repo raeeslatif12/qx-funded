@@ -31,6 +31,14 @@ test("production API uses same-origin frontend requests", () => {
   assert.match(serverFile, /app\.get\("\/api\/health"/);
 });
 
+test("login preserves valid sessions in other tabs and only removes expired sessions", () => {
+  assert.match(serverFile, /DELETE FROM sessions WHERE expires_at <= now\(\)/);
+  assert.doesNotMatch(
+    serverFile,
+    /DELETE FROM sessions WHERE user_id=\$1 OR expires_at <= now\(\)/,
+  );
+});
+
 test("emitted Nitro handler serves the API endpoints", async () => {
   const apiHandler = (await import("../.vercel/output/functions/api/[...path].func/index.mjs"))
     .default;

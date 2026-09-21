@@ -95,18 +95,32 @@ export type ApiFailureKind = "network" | "timeout" | "http";
 
 export type CurrentUserResult =
   | { status: "authenticated"; user: PublicUser }
+  | { status: "restricted"; user: PublicUser }
   | { status: "unauthenticated"; user: null }
   | { status: "unavailable"; user: null };
+
+export function isAccountRestricted(user: PublicUser | null | undefined) {
+  return Boolean(user && user.accountStatus !== "active");
+}
 
 export class ApiError extends Error {
   readonly kind: ApiFailureKind;
   readonly status?: number;
+  readonly accountStatus?: PublicUser["accountStatus"];
+  readonly user?: PublicUser;
 
-  constructor(message: string, kind: ApiFailureKind, status?: number) {
+  constructor(
+    message: string,
+    kind: ApiFailureKind,
+    status?: number,
+    details?: { accountStatus?: PublicUser["accountStatus"]; user?: PublicUser },
+  ) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
+    this.accountStatus = details?.accountStatus;
+    this.user = details?.user;
   }
 }
 
@@ -422,6 +436,7 @@ async function request<T>(path: string, options: RequestInit = {}) {
         body.error || `Request failed (${response.status})`,
         "http",
         response.status,
+        body,
       );
     }
     if (response.status === 204) return undefined as T;
@@ -513,7 +528,7 @@ function mapOrder(row: any): OrderRecord {
     updatedAt: row.updated_at ?? row.updatedAt,
     transactionHash: row.transaction_id ?? row.transactionHash,
     rejectionReason: row.rejection_reason ?? row.rejectionReason,
-    paymentProof: row.payment_proof
+    paymentProof: row.payment_proof_id
       ? `/api/orders/${encodeURIComponent(normalizePlainText(row.id))}/payment-proof/${encodeURIComponent(normalizePlainText(row.payment_proof_id))}`
       : row.paymentProof,
     paymentProofName: row.payment_proof_name,
@@ -544,6 +559,9 @@ export async function checkCurrentUser(): Promise<CurrentUserResult> {
     }
     if (error instanceof ApiError && error.status === 401) {
       return { status: "unauthenticated", user: null };
+    }
+    if (error instanceof ApiError && error.accountStatus && error.user) {
+      return { status: "restricted", user: error.user };
     }
     return { status: "unavailable", user: null };
   }

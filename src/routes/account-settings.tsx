@@ -2,7 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/lib/auth";
 import { updateAccountSettingsWithFallback } from "@/lib/backend";
-import { Layout } from "@/components/QxtSite";
+import { AccountStatusScreen, Layout } from "@/components/QxtSite";
+import { isAccountRestricted } from "@/lib/backend";
 
 export const Route = createFileRoute("/account-settings")({
   head: () => ({
@@ -34,6 +35,10 @@ function AccountSettingsPage() {
     setEmail(user.email);
     setLoading(false);
   }, [initializing, navigate, user]);
+
+  if (!initializing && user && isAccountRestricted(user)) {
+    return <AccountStatusScreen status={user.accountStatus} />;
+  }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

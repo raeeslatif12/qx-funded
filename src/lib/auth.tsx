@@ -14,7 +14,7 @@ type AuthContextValue = AuthState & {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function nextState(result: CurrentUserResult, current: AuthState): AuthState {
-  if (result.status === "authenticated") {
+  if (result.status === "authenticated" || result.status === "restricted") {
     return { user: result.user, initializing: false };
   }
   if (result.status === "unauthenticated") {

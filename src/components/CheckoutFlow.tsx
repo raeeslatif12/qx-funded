@@ -13,7 +13,15 @@ import {
   WalletCards,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth";
 import { getCustomDirectPlan } from "@/lib/qxt-data";
@@ -40,6 +48,7 @@ import {
   getPaymentMethodById,
   getPlanByIdWithCache,
   getUsersForAdmin,
+  isAccountRestricted,
   loginUser,
   rejectOrderForAdmin,
   submitPaymentForOrder,
@@ -54,7 +63,7 @@ import {
   type PlanRecord,
   type PublicUser,
 } from "@/lib/backend";
-import { Layout, SyncNotice } from "./QxtSite";
+import { AccountStatusScreen, Layout, SyncNotice } from "./QxtSite";
 
 const apiOrigin = "";
 function normalizeRouteValue(value: string | number | undefined | null) {
@@ -107,9 +116,14 @@ function AuthRequired({ next }: { next: string }) {
           <p className="mt-3 text-muted-foreground">
             Your account is required before we can save an order.
           </p>
-          <Link to="/login" search={{ redirect: next }} className="btn-gold mt-7">
-            Login / Sign Up <ArrowRight size={15} />
-          </Link>
+          <div className="mt-7 flex flex-wrap items-center gap-3">
+            <Link to="/login" search={{ mode: "register", redirect: next }} className="btn-gold">
+              Create Account <ArrowRight size={15} />
+            </Link>
+            <Link to="/login" search={{ redirect: next }} className="btn-secondary">
+              Existing user? Sign in
+            </Link>
+          </div>
         </div>
       </section>
     </Layout>
@@ -247,6 +261,7 @@ export function CheckoutGatewayPage() {
       );
   }, [loading, next, user]);
   if (loading) return <LoadingPage />;
+  if (user && isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   return user ? <BrokerSelectionPage /> : <AuthRequired next={next} />;
 }
 
@@ -278,6 +293,7 @@ export function BrokerSelectionPage() {
     void loadBrokers();
   }, []);
 
+  if (user && isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   if (!user) return <AuthRequired next={`/checkout/broker?plan=${encodeURIComponent(planId)}`} />;
 
   return (
@@ -386,6 +402,7 @@ export function PaymentMethodSelectionPage() {
   }, []);
 
   if (loading) return <LoadingPage />;
+  if (user && isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   if (!user)
     return (
       <AuthRequired
@@ -535,6 +552,7 @@ export function PaymentDetailsPage() {
         next={`/checkout/details?plan=${planId}&broker=${brokerId}&method=${methodId}`}
       />
     );
+  if (isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   if (loadingDetails)
     return (
       <FlowShell
@@ -706,6 +724,7 @@ export function PaymentProofPage() {
     };
   }, [orderId, user]);
   if (loading) return <LoadingPage />;
+  if (user && isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   if (!user) return <AuthRequired next={`/checkout/proof?order=${orderId}`} />;
   if (loadingOrder)
     return (
@@ -900,6 +919,7 @@ export function UserOrdersDashboardPage() {
   };
 
   if (loading) return <LoadingPage />;
+  if (user && isAccountRestricted(user)) return <AccountStatusScreen status={user.accountStatus} />;
   if (!user) return <AuthRequired next="/dashboard" />;
 
   return (
@@ -1223,6 +1243,7 @@ export function AdminDashboardPage() {
   const [checkingUser, setCheckingUser] = useState<AdminUser | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [approvalForm, setApprovalForm] = useState({ accountEmail: "", accountPassword: "" });
+  const adminLoadInFlight = useRef(false);
   const [newPlan, setNewPlan] = useState({
     id: "",
     type: "Instant",
@@ -1269,48 +1290,62 @@ export function AdminDashboardPage() {
     setNewPlan((current) => ({ ...current, ...fields }));
   }, [newPlan.dailyLoss, newPlan.price, newPlan.size, newPlan.type]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.admin) return;
-    const [
-      loadedOrders,
-      loadedSummary,
-      loadedUsers,
-      loadedPlans,
-      loadedBrokers,
-      loadedPaymentMethods,
-    ] = await Promise.all([
-      getAllOrdersForAdmin(),
-      getAdminSummary(),
-      getUsersForAdmin(),
-      getAdminPlans(),
-      getAdminBrokers(),
-      getAdminPaymentMethods(),
-    ]);
-    setOrders(loadedOrders);
-    setSummary(loadedSummary);
-    setUsers(loadedUsers);
-    setUserDrafts(
-      Object.fromEntries(
-        loadedUsers.map((entry) => [
-          entry.id,
-          {
-            name: entry.name,
-            email: entry.email,
-            accountStatus: entry.accountStatus,
-            password: "",
-            showPassword: false,
-          },
-        ]),
-      ),
-    );
-    setPlans(loadedPlans);
-    setBrokers(loadedBrokers);
-    setPaymentMethods(loadedPaymentMethods);
-  };
+    if (adminLoadInFlight.current) return;
+    adminLoadInFlight.current = true;
+    try {
+      const [
+        loadedOrders,
+        loadedSummary,
+        loadedUsers,
+        loadedPlans,
+        loadedBrokers,
+        loadedPaymentMethods,
+      ] = await Promise.all([
+        getAllOrdersForAdmin(),
+        getAdminSummary(),
+        getUsersForAdmin(),
+        getAdminPlans(),
+        getAdminBrokers(),
+        getAdminPaymentMethods(),
+      ]);
+      setOrders(loadedOrders);
+      setSelectedOrder((current) =>
+        current ? loadedOrders.find((order) => order.id === current.id) || null : current,
+      );
+      setSummary(loadedSummary);
+      setUsers(loadedUsers);
+      setUserDrafts(
+        Object.fromEntries(
+          loadedUsers.map((entry) => [
+            entry.id,
+            {
+              name: entry.name,
+              email: entry.email,
+              accountStatus: entry.accountStatus,
+              password: "",
+              showPassword: false,
+            },
+          ]),
+        ),
+      );
+      setPlans(loadedPlans);
+      setBrokers(loadedBrokers);
+      setPaymentMethods(loadedPaymentMethods);
+    } finally {
+      adminLoadInFlight.current = false;
+    }
+  }, [user?.admin]);
 
   useEffect(() => {
-    if (user?.admin) void loadData();
-  }, [user]);
+    if (!user?.admin || !["dashboard", "orders"].includes(activeTab)) return;
+    void loadData().catch(() => undefined);
+    const interval = window.setInterval(() => {
+      void loadData().catch(() => undefined);
+    }, 7000);
+    return () => window.clearInterval(interval);
+  }, [activeTab, loadData, user?.admin]);
 
   const userById = useMemo(() => new Map(users.map((entry) => [entry.id, entry])), [users]);
   const filteredUsers = useMemo(() => {

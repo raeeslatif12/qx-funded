@@ -141,6 +141,13 @@ function jsonError(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
+function accountStatusMessage(status) {
+  if (status === "pending") return "Your account is currently pending.";
+  if (status === "suspended") return "Your account has been suspended.";
+  if (status === "locked") return "Your account has been locked.";
+  return "Your account is not currently active.";
+}
+
 const sessionCookieOptions = {
   httpOnly: true,
   sameSite: cookieSameSite,
@@ -175,7 +182,7 @@ async function storePaymentProof(file, orderId) {
         token: blobToken,
       },
     );
-    return blob.url;
+    return blob.pathname;
   }
   return `/uploads/${path.basename(file.path)}`;
 }
@@ -190,6 +197,13 @@ async function auth(req, res, next) {
     );
     if (!result.rowCount) return jsonError(res, 401, "Session expired.");
     req.user = result.rows[0];
+    if (!req.user.is_admin && req.user.account_status !== "active") {
+      return res.status(403).json({
+        error: accountStatusMessage(req.user.account_status),
+        accountStatus: req.user.account_status,
+        user: publicUser(req.user),
+      });
+    }
     await pool.query("UPDATE sessions SET last_seen_at=now() WHERE token_hash=$1", [
       hashToken(token),
     ]);
@@ -256,11 +270,18 @@ app.post("/api/auth/login", async (req, res, next) => {
     if (!result.rowCount || !(await bcrypt.compare(password || "", result.rows[0].password_hash)))
       return jsonError(res, 401, "Invalid email or password.");
     const user = result.rows[0];
+    if (!user.is_admin && user.account_status !== "active") {
+      return res.status(403).json({
+        error: accountStatusMessage(user.account_status),
+        accountStatus: user.account_status,
+        user: publicUser(user),
+      });
+    }
     const token = createToken();
     await pool.query("UPDATE users SET last_login_at=now(), updated_at=now() WHERE id=$1", [
       user.id,
     ]);
-    await pool.query("DELETE FROM sessions WHERE user_id=$1 OR expires_at <= now()", [user.id]);
+    await pool.query("DELETE FROM sessions WHERE expires_at <= now()");
     await pool.query(
       "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1,$2,now()+interval '7 days')",
       [user.id, hashToken(token)],
@@ -775,6 +796,7 @@ app.post(
   async (req, res, next) => {
     if (!req.file) return jsonError(res, 400, "Payment screenshot is required.");
     let storedProofPath;
+    let previousProofPaths = [];
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -787,10 +809,16 @@ app.post(
         return jsonError(res, 404, "Order not found.");
       }
       const order = found.rows[0];
+      const previous = await client.query(
+        "SELECT storage_path FROM payment_proofs WHERE payment_id=$1 ORDER BY created_at DESC",
+        [order.payment_id],
+      );
+      previousProofPaths = previous.rows.map((row) => row.storage_path);
       const proofPath = await storePaymentProof(req.file, req.params.id);
       storedProofPath = proofPath;
-      await client.query(
-        "INSERT INTO payment_proofs (payment_id,storage_path,original_name,mime_type,size_bytes) VALUES ($1,$2,$3,$4,$5)",
+      await client.query("DELETE FROM payment_proofs WHERE payment_id=$1", [order.payment_id]);
+      const proof = await client.query(
+        "INSERT INTO payment_proofs (payment_id,storage_path,original_name,mime_type,size_bytes) VALUES ($1,$2,$3,$4,$5) RETURNING id,storage_path,original_name,mime_type,size_bytes,created_at",
         [order.payment_id, proofPath, req.file.originalname, req.file.mimetype, req.file.size],
       );
       await client.query(
@@ -805,7 +833,29 @@ app.post(
       void audit(pool, req.user.id, "payment.proof_submitted", "order", req.params.id).catch(
         () => undefined,
       );
-      res.status(201).json({ status: "pending_verification" });
+      const proofRecord = proof.rows[0];
+      for (const previousProofPath of previousProofPaths) {
+        if (useBlobStorage && previousProofPath !== proofRecord.storage_path) {
+          await deleteBlob(previousProofPath, { token: blobToken }).catch(() => undefined);
+        } else if (!useBlobStorage && previousProofPath !== proofRecord.storage_path) {
+          await fs.promises.unlink(previousProofPath).catch(() => undefined);
+        }
+      }
+      res.status(201).json({
+        status: "pending_verification",
+        order: {
+          id: req.params.id,
+          paymentStatus: "pending",
+          orderStatus: "pending_verification",
+        },
+        paymentProof: {
+          id: proofRecord.id,
+          originalName: proofRecord.original_name,
+          mimeType: proofRecord.mime_type,
+          sizeBytes: proofRecord.size_bytes,
+          createdAt: proofRecord.created_at,
+        },
+      });
     } catch (error) {
       await client.query("ROLLBACK");
       if (!useBlobStorage && req.file?.path)

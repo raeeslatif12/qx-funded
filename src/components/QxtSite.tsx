@@ -42,6 +42,8 @@ import {
   registerUser,
   subscribeConnectionMode,
   updateAccountSettings,
+  ApiError,
+  type AccountStatus,
   type BrokerRecord,
   type PlanRecord,
 } from "@/lib/backend";
@@ -399,6 +401,38 @@ export function Layout({ children, minimal = false }: { children: ReactNode; min
         {!minimal && <ChatWidget />}
       </div>
     </div>
+  );
+}
+
+export function AccountStatusScreen({ status }: { status: AccountStatus }) {
+  const copy =
+    status === "pending"
+      ? [
+          "Account Pending",
+          "Your account is currently pending. Please wait until your account is activated.",
+        ]
+      : status === "suspended"
+        ? [
+            "Account Suspended",
+            "Your account has been suspended. Please contact support for assistance.",
+          ]
+        : [
+            "Account Locked",
+            "Your account has been locked. Please contact support for assistance.",
+          ];
+  return (
+    <Layout minimal>
+      <main className="flex min-h-screen items-center justify-center px-4 py-12">
+        <div className="w-full max-w-xl rounded-md border border-border bg-surface p-8 text-center shadow-sm sm:p-10">
+          <p className="eyebrow">Account access</p>
+          <h1 className="mt-4 text-3xl font-semibold">{copy[0]}</h1>
+          <p className="mt-4 leading-7 text-muted-foreground">{copy[1]}</p>
+          <Link to="/contact" className="btn-secondary mt-7">
+            Contact support
+          </Link>
+        </div>
+      </main>
+    </Layout>
   );
 }
 
@@ -1455,7 +1489,12 @@ export function LoginPage() {
   const inFlight = useRef(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(() => {
+    if (typeof window === "undefined") return "login";
+    return new URLSearchParams(window.location.search).get("mode") === "register"
+      ? "register"
+      : "login";
+  });
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (inFlight.current) return;
@@ -1492,7 +1531,17 @@ export function LoginPage() {
         navigate({ to: "/checkout/broker", search: { plan } });
       } else navigate({ to: "/dashboard" });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to authenticate.");
+      if (caught instanceof ApiError && caught.accountStatus) {
+        setError(
+          caught.accountStatus === "pending"
+            ? "Your account is currently Pending. Please wait until your account is activated."
+            : caught.accountStatus === "suspended"
+              ? "Your account has been Suspended. Please contact support for assistance."
+              : "Your account has been Locked. Please contact support for assistance.",
+        );
+      } else {
+        setError(caught instanceof Error ? caught.message : "Unable to authenticate.");
+      }
       inFlight.current = false;
       setSubmitting(false);
     }
