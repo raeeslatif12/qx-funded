@@ -3,7 +3,7 @@ import { getCustomDirectPlanById } from "@/lib/qxt-data";
 export type AccountStatus = "active" | "pending" | "suspended" | "locked";
 export type PaymentStatus = "pending" | "confirmed" | "rejected";
 export type OrderStatus =
-  "pending_verification" | "approved" | "rejected" | "active" | "payment_rejected";
+  "pending" | "pending_verification" | "approved" | "rejected" | "active" | "payment_rejected";
 export type VerificationStatus = "pending" | "verified" | "rejected";
 
 export type PublicUser = {
@@ -385,6 +385,7 @@ async function serverFirstWithCache<T>(
       writeLocalCache(key, data);
       return { data, source: "server" } as CacheResult<T>;
     } catch (error) {
+      if (!isBackendUnavailable(error)) throw error;
       const cached = readLocalCache<T>(key);
       if (cached) return { data: cached.data, source: "cache", cachedAt: cached.cachedAt };
       throw error;

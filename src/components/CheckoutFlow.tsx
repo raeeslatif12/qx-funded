@@ -36,7 +36,6 @@ import {
   getCurrentUser,
   getFundedAccountForOrder,
   getOrderById,
-  getCachedOrdersForUser,
   getOrdersForUserWithCache,
   getPaymentMethodById,
   getPlanByIdWithCache,
@@ -68,7 +67,7 @@ function queryValue(name: string) {
   return normalizeRouteValue(value);
 }
 function statusLabel(status: string) {
-  if (status === "pending_verification") return "Pending Verification";
+  if (status === "pending" || status === "pending_verification") return "Pending";
   if (status === "approved" || status === "active") return "Approved";
   if (status === "rejected" || status === "payment_rejected") return "Rejected";
   return status;
@@ -845,11 +844,6 @@ export function UserOrdersDashboardPage() {
 
   useEffect(() => {
     if (!user) return;
-    const cached = getCachedOrdersForUser(user.id);
-    if (cached) {
-      setOrders(cached.data);
-      setOrdersLoading(false);
-    }
     void loadOrders();
     const retry = () => void loadOrders();
     window.addEventListener("online", retry);
@@ -955,7 +949,8 @@ export function UserOrdersDashboardPage() {
                           className={
                             rejected
                               ? "text-red-400"
-                              : order.orderStatus === "pending_verification"
+                              : order.orderStatus === "pending" ||
+                                  order.orderStatus === "pending_verification"
                                 ? "text-amber-300"
                                 : "text-gold"
                           }
@@ -1328,7 +1323,8 @@ export function AdminDashboardPage() {
       orders.filter((order) => {
         const matchesFilter =
           filter === "all" ||
-          (filter === "pending" && order.orderStatus === "pending_verification") ||
+          (filter === "pending" &&
+            (order.orderStatus === "pending" || order.orderStatus === "pending_verification")) ||
           (filter === "approved" &&
             (order.orderStatus === "approved" || order.orderStatus === "active")) ||
           (filter === "rejected" &&
@@ -1867,7 +1863,7 @@ export function AdminDashboardPage() {
                                   </td>
                                   <td className="px-4 py-3">
                                     <span
-                                      className={`rounded-full px-2.5 py-1 text-xs ${order.orderStatus === "pending_verification" ? "bg-amber-500/10 text-amber-300" : order.orderStatus === "approved" || order.orderStatus === "active" ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300"}`}
+                                      className={`rounded-full px-2.5 py-1 text-xs ${order.orderStatus === "pending" || order.orderStatus === "pending_verification" ? "bg-amber-500/10 text-amber-300" : order.orderStatus === "approved" || order.orderStatus === "active" ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300"}`}
                                     >
                                       {statusLabel(order.orderStatus)}
                                     </span>

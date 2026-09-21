@@ -13,3 +13,16 @@ test("admin dashboard enforces the dedicated login credentials and protected rou
     /if \(!user\?\.admin\) return <AdminAuthRequired next="\/admin-dashboard" \/>/i,
   );
 });
+
+test("customer orders do not apply cached status before the server-first loader resolves", () => {
+  const content = readFileSync(checkoutFlowFile, "utf8");
+  assert.match(content, /const result = await getOrdersForUserWithCache\(user\.id\);/);
+  assert.doesNotMatch(content, /const cached = getCachedOrdersForUser\(user\.id\);/);
+  assert.doesNotMatch(content, /setOrders\(cached\.data\);/);
+  assert.match(content, /status === "pending" \|\| status === "pending_verification"/);
+});
+
+test("shared cache fallback is limited to backend-unavailable errors", () => {
+  const content = readFileSync("src/lib/backend.ts", "utf8");
+  assert.match(content, /if \(!isBackendUnavailable\(error\)\) throw error;/);
+});
