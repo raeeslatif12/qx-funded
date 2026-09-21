@@ -927,6 +927,23 @@ export async function rejectOrderForAdmin(input: { orderId: string; reason?: str
     body: JSON.stringify({ reason: input.reason || "" }),
   });
 }
+export async function updateOrderStatusForAdmin(input: {
+  orderId: string;
+  status: "pending_verification" | "approved" | "rejected";
+  reason?: string;
+  accountEmail?: string;
+  accountPassword?: string;
+}) {
+  return request<{ order: any }>(`/api/admin/orders/${encodeURIComponent(input.orderId)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: input.status,
+      reason: input.reason || "",
+      accountEmail: input.accountEmail || "",
+      accountPassword: input.accountPassword || "",
+    }),
+  });
+}
 export async function getAdminSummary() {
   const result = await request<{ summary: any }>("/api/admin/summary");
   return {

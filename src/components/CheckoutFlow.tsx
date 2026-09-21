@@ -52,6 +52,7 @@ import {
   loginUser,
   rejectOrderForAdmin,
   submitPaymentForOrder,
+  updateOrderStatusForAdmin,
   updateAdminBroker,
   updateAdminPaymentMethod,
   updateAdminPlan,
@@ -1239,6 +1240,9 @@ export function AdminDashboardPage() {
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
   const [search, setSearch] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<OrderRecord | null>(null);
+  const [statusDraft, setStatusDraft] = useState<"pending_verification" | "approved" | "rejected">(
+    "pending_verification",
+  );
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [checkingUser, setCheckingUser] = useState<AdminUser | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -1411,6 +1415,33 @@ export function AdminDashboardPage() {
       setMessage("Order approved and account delivered.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to approve this order.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleStatusChange = async () => {
+    if (!selectedOrder || statusDraft === selectedOrder.orderStatus) return;
+    if (selectedOrder.orderStatus === "approved" || selectedOrder.orderStatus === "rejected") {
+      const confirmed = window.confirm(
+        `This order is already ${statusLabel(selectedOrder.orderStatus).toLowerCase()}. Are you sure you want to change its status?`,
+      );
+      if (!confirmed) return;
+    }
+    setSubmitting(true);
+    setMessage("");
+    try {
+      await updateOrderStatusForAdmin({
+        orderId: selectedOrder.id,
+        status: statusDraft,
+        reason: rejectionReason,
+        accountEmail: approvalForm.accountEmail,
+        accountPassword: approvalForm.accountPassword,
+      });
+      await loadData();
+      setMessage(`Order status changed to ${statusLabel(statusDraft)}.`);
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Unable to change order status.");
     } finally {
       setSubmitting(false);
     }
@@ -1908,7 +1939,16 @@ export function AdminDashboardPage() {
                                       <button
                                         type="button"
                                         className="btn-small btn-secondary"
-                                        onClick={() => setSelectedOrder(order)}
+                                        onClick={() => {
+                                          setSelectedOrder(order);
+                                          setStatusDraft(
+                                            order.orderStatus === "pending"
+                                              ? "pending_verification"
+                                              : order.orderStatus === "active"
+                                                ? "approved"
+                                                : order.orderStatus,
+                                          );
+                                        }}
                                       >
                                         View
                                       </button>
@@ -3121,6 +3161,33 @@ export function AdminDashboardPage() {
                   {message}
                 </div>
               ) : null}
+              <div className="mt-6 rounded-2xl border border-border bg-background p-4">
+                <h4 className="text-lg font-semibold">Change order status</h4>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Status changes update the related payment and funded-account records together.
+                </p>
+                <select
+                  value={statusDraft}
+                  onChange={(event) =>
+                    setStatusDraft(
+                      event.target.value as "pending_verification" | "approved" | "rejected",
+                    )
+                  }
+                  className="field mt-4"
+                >
+                  <option value="pending_verification">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={submitting || statusDraft === selectedOrder.orderStatus}
+                  className="btn-gold mt-4 disabled:opacity-50"
+                  onClick={() => void handleStatusChange()}
+                >
+                  Change Order Status
+                </button>
+              </div>
               <div className="mt-6 rounded-2xl border border-border bg-background p-4">
                 <h4 className="text-lg font-semibold">Reject order</h4>
                 <textarea

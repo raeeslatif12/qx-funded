@@ -39,6 +39,16 @@ test("login preserves valid sessions in other tabs and only removes expired sess
   );
 });
 
+test("admin order status endpoint supports reversible protected transitions", () => {
+  assert.match(serverFile, /app\.patch\("\/api\/admin\/orders\/:id\/status", auth, adminOnly/);
+  assert.match(serverFile, /previousStatus: order\.order_status/);
+  assert.match(serverFile, /newStatus: targetStatus/);
+  assert.match(serverFile, /DELETE FROM funded_accounts WHERE order_id=\$1/);
+  assert.match(serverFile, /INSERT INTO funded_accounts/);
+  assert.match(serverFile, /UPDATE payments SET status=\$1/);
+  assert.doesNotMatch(serverFile, /app\.patch\("\/api\/orders\/:id\/status"/);
+});
+
 test("emitted Nitro handler serves the API endpoints", async () => {
   const apiHandler = (await import("../.vercel/output/functions/api/[...path].func/index.mjs"))
     .default;

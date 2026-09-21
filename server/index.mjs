@@ -1031,54 +1031,14 @@ app.get("/api/admin/summary", auth, adminOnly, async (_req, res, next) => {
   }
 });
 
-async function rejectOrder(req, res, next) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const reason =
-      typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 1000) : null;
-    const found = await client.query(
-      "SELECT o.id,p.id AS payment_id, o.order_status FROM orders o JOIN payments p ON p.order_id=o.id WHERE o.id=$1 FOR UPDATE",
-      [req.params.id],
-    );
-    if (!found.rowCount) {
-      await client.query("ROLLBACK");
-      return jsonError(res, 404, "Order not found.");
-    }
-    await client.query(
-      "UPDATE orders SET payment_status=$1,order_status=$2,rejection_reason=$3,updated_at=now() WHERE id=$4",
-      ["rejected", "rejected", reason, req.params.id],
-    );
-    await client.query(
-      "UPDATE payments SET status=$1,rejection_reason=$2,verified_at=now(),verified_by=$3,updated_at=now() WHERE id=$4",
-      ["rejected", reason, req.user.id, found.rows[0].payment_id],
-    );
-    await client.query("COMMIT");
-    void audit(pool, req.user.id, "payment.rejected", "order", req.params.id, { reason }).catch(
-      () => undefined,
-    );
-    res.json({
-      order: {
-        id: req.params.id,
-        paymentStatus: "rejected",
-        orderStatus: "rejected",
-        rejectionReason: reason,
-      },
-    });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    next(error);
-  } finally {
-    client.release();
-  }
-}
-
-async function approveOrder(req, res, next) {
+async function setOrderStatus(req, res, next, requestedStatus) {
+  const targetStatus = requestedStatus || req.body?.status;
+  if (!["pending_verification", "approved", "rejected"].includes(targetStatus))
+    return jsonError(res, 400, "Invalid order status.");
   const accountEmail = String(req.body?.accountEmail || "").trim();
   const accountPassword = String(req.body?.accountPassword || "").trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accountEmail))
-    return jsonError(res, 400, "A valid account email is required.");
-  if (!accountPassword) return jsonError(res, 400, "An account password is required.");
+  const reason =
+    typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 1000) : null;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1091,34 +1051,65 @@ async function approveOrder(req, res, next) {
       return jsonError(res, 404, "Order not found.");
     }
     const order = found.rows[0];
-    if (order.order_status === "rejected" || order.payment_status === "rejected") {
-      await client.query("ROLLBACK");
-      return jsonError(res, 409, "This order has already been rejected and cannot be approved.");
+    if (targetStatus === "approved") {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accountEmail))
+        return await rollbackError(client, res, 400, "A valid account email is required.");
+      if (!accountPassword)
+        return await rollbackError(client, res, 400, "An account password is required.");
+      const encryptedPassword = encryptSecret(accountPassword);
+      await client.query(
+        `INSERT INTO funded_accounts (order_id, user_id, broker_id, account_email, account_password_encrypted)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (order_id) DO UPDATE SET user_id=EXCLUDED.user_id, broker_id=EXCLUDED.broker_id, account_email=EXCLUDED.account_email, account_password_encrypted=EXCLUDED.account_password_encrypted, updated_at=now()`,
+        [order.id, order.user_id, order.broker_id, accountEmail, encryptedPassword],
+      );
+      await client.query(
+        "UPDATE orders SET payment_status='confirmed',order_status='approved',rejection_reason=NULL,approved_by=$1,approved_at=now(),updated_at=now() WHERE id=$2",
+        [req.user.id, req.params.id],
+      );
+      await client.query(
+        "UPDATE payments SET status='confirmed',verified_at=now(),verified_by=$1,rejection_reason=NULL,updated_at=now() WHERE id=$2",
+        [req.user.id, order.payment_id],
+      );
+    } else {
+      await client.query("DELETE FROM funded_accounts WHERE order_id=$1", [req.params.id]);
+      await client.query(
+        "UPDATE orders SET payment_status=$1,order_status=$2,rejection_reason=$3,approved_by=NULL,approved_at=NULL,updated_at=now() WHERE id=$4",
+        [
+          targetStatus === "rejected" ? "rejected" : "pending",
+          targetStatus,
+          targetStatus === "rejected" ? reason : null,
+          req.params.id,
+        ],
+      );
+      await client.query(
+        "UPDATE payments SET status=$1,rejection_reason=$2,verified_at=$3,verified_by=$4,updated_at=now() WHERE id=$5",
+        [
+          targetStatus === "rejected" ? "rejected" : "pending",
+          targetStatus === "rejected" ? reason : null,
+          targetStatus === "pending_verification" ? null : new Date(),
+          targetStatus === "pending_verification" ? null : req.user.id,
+          order.payment_id,
+        ],
+      );
     }
-    const encryptedPassword = encryptSecret(accountPassword);
-    await client.query(
-      `INSERT INTO funded_accounts (order_id, user_id, broker_id, account_email, account_password_encrypted)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (order_id) DO UPDATE SET user_id=EXCLUDED.user_id, broker_id=EXCLUDED.broker_id, account_email=EXCLUDED.account_email, account_password_encrypted=EXCLUDED.account_password_encrypted, updated_at=now()`,
-      [order.id, order.user_id, order.broker_id, accountEmail, encryptedPassword],
-    );
-    await client.query(
-      "UPDATE orders SET payment_status=$1,order_status=$2,rejection_reason=NULL,approved_by=$3,approved_at=now(),updated_at=now() WHERE id=$4",
-      ["confirmed", "approved", req.user.id, req.params.id],
-    );
-    await client.query(
-      "UPDATE payments SET status=$1,verified_at=now(),verified_by=$2,rejection_reason=NULL,updated_at=now() WHERE id=$3",
-      ["confirmed", req.user.id, order.payment_id],
-    );
-    await audit(client, req.user.id, "payment.approved", "order", req.params.id, {
-      accountEmail,
-      brokerId: order.broker_id,
-      paidAmount: order.amount,
+    await audit(client, req.user.id, "order.status_changed", "order", req.params.id, {
+      previousStatus: order.order_status,
+      newStatus: targetStatus,
     });
     await client.query("COMMIT");
-    res.json({
-      order: { id: req.params.id, paymentStatus: "confirmed", orderStatus: "approved" },
-      fundedAccount: { email: accountEmail, createdAt: new Date().toISOString() },
+    return res.json({
+      order: {
+        id: req.params.id,
+        paymentStatus:
+          targetStatus === "approved"
+            ? "confirmed"
+            : targetStatus === "rejected"
+              ? "rejected"
+              : "pending",
+        orderStatus: targetStatus,
+        rejectionReason: targetStatus === "rejected" ? reason : null,
+      },
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1126,6 +1117,19 @@ async function approveOrder(req, res, next) {
   } finally {
     client.release();
   }
+}
+
+async function rollbackError(client, res, status, message) {
+  await client.query("ROLLBACK");
+  return jsonError(res, status, message);
+}
+
+async function rejectOrder(req, res, next) {
+  return setOrderStatus(req, res, next, "rejected");
+}
+
+async function approveOrder(req, res, next) {
+  return setOrderStatus(req, res, next, "approved");
 }
 app.patch("/api/admin/orders/:id/approve", auth, adminOnly, (req, res, next) =>
   approveOrder(req, res, next),
@@ -1135,6 +1139,9 @@ app.patch("/api/admin/orders/:id/verify", auth, adminOnly, (req, res, next) =>
 );
 app.patch("/api/admin/orders/:id/reject", auth, adminOnly, (req, res, next) =>
   rejectOrder(req, res, next),
+);
+app.patch("/api/admin/orders/:id/status", auth, adminOnly, (req, res, next) =>
+  setOrderStatus(req, res, next),
 );
 
 function safeErrorMessage(error) {

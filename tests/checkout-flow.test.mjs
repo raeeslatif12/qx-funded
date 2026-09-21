@@ -26,3 +26,11 @@ test("shared cache fallback is limited to backend-unavailable errors", () => {
   const content = readFileSync("src/lib/backend.ts", "utf8");
   assert.match(content, /if \(!isBackendUnavailable\(error\)\) throw error;/);
 });
+
+test("admin order details expose reversible status controls", () => {
+  const content = readFileSync(checkoutFlowFile, "utf8");
+  assert.match(content, /Change order status/);
+  assert.match(content, /value="pending_verification">Pending<\/option>/);
+  assert.match(content, /This order is already/);
+  assert.match(content, /updateOrderStatusForAdmin/);
+});
