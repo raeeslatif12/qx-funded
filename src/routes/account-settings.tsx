@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/lib/auth";
-import { updateAccountSettingsWithFallback } from "@/lib/backend";
+import { updateAccountSettings } from "@/lib/backend";
 import { AccountStatusScreen, Layout } from "@/components/QxtSite";
 import { isAccountRestricted } from "@/lib/backend";
 
@@ -73,7 +73,7 @@ function AccountSettingsPage() {
         payload.currentPassword = currentPassword;
       }
 
-      const updatedUser = await updateAccountSettingsWithFallback(payload);
+      const updatedUser = await updateAccountSettings(payload);
       setUser(updatedUser);
       setMessage("Your account details were updated successfully.");
       setName(updatedUser.name);
