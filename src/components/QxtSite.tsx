@@ -1745,7 +1745,16 @@ export function ForgotPasswordPage() {
     }
   };
 
-  if (initializing) return <LoadingPage />;
+  if (initializing)
+    return (
+      <Layout>
+        <section className="section">
+          <div className="container-x">
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </section>
+      </Layout>
+    );
   if (!user)
     return (
       <FlowShell
