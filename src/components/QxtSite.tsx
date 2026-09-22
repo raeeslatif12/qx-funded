@@ -1600,9 +1600,9 @@ export function LoginPage() {
             </label>
             <Link
               to="/forgot-password"
-              className="-mt-2 block text-sm text-gold hover:text-foreground"
+              className="-mt-2 inline-flex w-fit rounded-md border border-gold/40 px-3 py-2 text-sm font-medium text-gold hover:bg-gold/10 hover:text-foreground"
             >
-              Forgot funded-account password?
+              Forgot Password? Reset for $5
             </Link>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <button className="btn-gold justify-center" type="submit" disabled={submitting}>
