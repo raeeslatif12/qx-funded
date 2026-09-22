@@ -1598,6 +1598,12 @@ export function LoginPage() {
                 placeholder="At least 8 characters"
               />
             </label>
+            <Link
+              to="/forgot-password"
+              className="-mt-2 block text-sm text-gold hover:text-foreground"
+            >
+              Forgot funded-account password?
+            </Link>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <button className="btn-gold justify-center" type="submit" disabled={submitting}>
               {submitting
@@ -1620,14 +1626,6 @@ export function LoginPage() {
           >
             {mode === "login" ? "Create an account" : "Already have an account? Sign in"}
           </button>
-          {mode === "login" && (
-            <Link
-              to="/forgot-password"
-              className="mt-4 block text-sm text-muted-foreground hover:text-gold"
-            >
-              Forgot funded-account password?
-            </Link>
-          )}
         </div>
         <aside className="auth-aside">
           <blockquote>
