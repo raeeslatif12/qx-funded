@@ -40,6 +40,7 @@ import {
   getAdminPaymentMethods,
   getAdminPlans,
   getAdminSummary,
+  getPasswordResetsForAdmin,
   getAllOrdersForAdmin,
   getCurrentUser,
   getFundedAccountForOrder,
@@ -57,12 +58,14 @@ import {
   updateAdminPaymentMethod,
   updateAdminPlan,
   updateAdminUser,
+  updatePasswordResetForAdmin,
   type AdminUser,
   type BrokerRecord,
   type OrderRecord,
   type PaymentMethod,
   type PlanRecord,
   type PublicUser,
+  type PasswordResetRequest,
 } from "@/lib/backend";
 import { AccountStatusScreen, Layout, SyncNotice } from "./QxtSite";
 
@@ -1219,7 +1222,7 @@ export function AdminLoginPage() {
 export function AdminDashboardPage() {
   const { user, loading } = useUser();
   const [activeTab, setActiveTab] = useState<
-    "dashboard" | "orders" | "plans" | "brokers" | "payment-methods" | "users"
+    "password-resets" | "dashboard" | "orders" | "plans" | "brokers" | "payment-methods" | "users"
   >("dashboard");
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [plans, setPlans] = useState<PlanRecord[]>([]);
@@ -1227,6 +1230,7 @@ export function AdminDashboardPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userDrafts, setUserDrafts] = useState<Record<string, AdminUserDraft>>({});
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [passwordResets, setPasswordResets] = useState<PasswordResetRequest[]>([]);
   const [userSearch, setUserSearch] = useState("");
   const [summary, setSummary] = useState({
     totalUsers: 0,
@@ -1306,6 +1310,7 @@ export function AdminDashboardPage() {
         loadedPlans,
         loadedBrokers,
         loadedPaymentMethods,
+        loadedPasswordResets,
       ] = await Promise.all([
         getAllOrdersForAdmin(),
         getAdminSummary(),
@@ -1313,6 +1318,7 @@ export function AdminDashboardPage() {
         getAdminPlans(),
         getAdminBrokers(),
         getAdminPaymentMethods(),
+        getPasswordResetsForAdmin(),
       ]);
       setOrders(loadedOrders);
       setSelectedOrder((current) =>
@@ -1337,13 +1343,14 @@ export function AdminDashboardPage() {
       setPlans(loadedPlans);
       setBrokers(loadedBrokers);
       setPaymentMethods(loadedPaymentMethods);
+      setPasswordResets(loadedPasswordResets);
     } finally {
       adminLoadInFlight.current = false;
     }
   }, [user?.admin]);
 
   useEffect(() => {
-    if (!user?.admin || !["dashboard", "orders"].includes(activeTab)) return;
+    if (!user?.admin || !["dashboard", "orders", "password-resets"].includes(activeTab)) return;
     void loadData().catch(() => undefined);
     const interval = window.setInterval(() => {
       void loadData().catch(() => undefined);
@@ -1394,6 +1401,25 @@ export function AdminDashboardPage() {
       });
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Unable to reject this order.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handlePasswordResetStatus = async (
+    entry: PasswordResetRequest,
+    status: "approved" | "rejected",
+  ) => {
+    setSubmitting(true);
+    setMessage("");
+    try {
+      await updatePasswordResetForAdmin({ requestId: entry.id, status });
+      await loadData();
+      setMessage(
+        status === "approved" ? "Password reset approved and applied." : "Password reset rejected.",
+      );
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Unable to update password reset.");
     } finally {
       setSubmitting(false);
     }
@@ -1711,6 +1737,7 @@ export function AdminDashboardPage() {
     { key: "plans", label: "Plans" },
     { key: "brokers", label: "Brokers" },
     { key: "payment-methods", label: "Payment Methods" },
+    { key: "password-resets", label: "Password Resets" },
     { key: "users", label: "Users" },
   ] as const;
 
@@ -2746,6 +2773,140 @@ export function AdminDashboardPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                </>
+              )}
+
+              {activeTab === "password-resets" && (
+                <>
+                  <div className="mb-6">
+                    <p className="eyebrow">Password resets</p>
+                    <h2 className="mt-2 text-3xl font-semibold text-foreground">Reset requests</h2>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Review the fixed $5 payment before applying any funded-account password
+                      change.
+                    </p>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-border bg-background/50">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-[1100px] text-left text-sm">
+                        <thead className="bg-surface/80">
+                          <tr>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">
+                              Customer
+                            </th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Account</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">
+                              Fee / method
+                            </th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Payment</th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">
+                              Submitted
+                            </th>
+                            <th className="px-4 py-3 font-medium text-muted-foreground">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {passwordResets.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={6}
+                                className="px-4 py-10 text-center text-muted-foreground"
+                              >
+                                No password reset requests.
+                              </td>
+                            </tr>
+                          ) : (
+                            passwordResets.map((entry) => (
+                              <tr key={entry.id} className="border-t border-border align-top">
+                                <td className="px-4 py-3">
+                                  <p className="font-medium">
+                                    {entry.userName || "Unknown customer"}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {entry.userEmail || entry.userId}
+                                  </p>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <p>{entry.accountIdentifier}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Order #{entry.orderId || "-"}
+                                  </p>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <p>
+                                    ${entry.amount.toFixed(2)} {entry.currency}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {entry.paymentMethodName}
+                                  </p>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span
+                                    className={
+                                      entry.resetStatus === "rejected"
+                                        ? "text-red-300"
+                                        : entry.resetStatus === "approved"
+                                          ? "text-emerald-300"
+                                          : "text-amber-300"
+                                    }
+                                  >
+                                    {entry.resetStatus === "pending" && entry.paymentProofId
+                                      ? "Pending verification"
+                                      : entry.resetStatus}
+                                  </span>
+                                  {entry.paymentProofId && (
+                                    <a
+                                      className="mt-2 block text-link"
+                                      href={`/api/admin/password-resets/${encodeURIComponent(entry.id)}/payment-proof`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      Open proof
+                                    </a>
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+                                  {formatDateTime(entry.createdAt)}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex gap-2">
+                                    {entry.resetStatus === "pending" && entry.paymentProofId ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="btn-small btn-gold"
+                                          disabled={submitting}
+                                          onClick={() =>
+                                            void handlePasswordResetStatus(entry, "approved")
+                                          }
+                                        >
+                                          Approve Reset
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-small btn-secondary"
+                                          disabled={submitting}
+                                          onClick={() =>
+                                            void handlePasswordResetStatus(entry, "rejected")
+                                          }
+                                        >
+                                          Reject
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground">
+                                        No action
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </>
               )}

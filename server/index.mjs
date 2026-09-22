@@ -168,12 +168,12 @@ function isAllowedUpload(file) {
   return Boolean(extensions?.includes(path.extname(file.originalname).toLowerCase()));
 }
 
-async function storePaymentProof(file, orderId) {
+async function storePaymentProof(file, ownerId, prefix = "payment-proofs") {
   if (!isAllowedUpload(file)) throw new Error("Unsupported payment proof file type.");
   if (useBlobStorage) {
     const extension = path.extname(file.originalname).toLowerCase() || ".bin";
     const blob = await putBlob(
-      `payment-proofs/${orderId}/${crypto.randomUUID()}${extension}`,
+      `${prefix}/${ownerId}/${crypto.randomUUID()}${extension}`,
       file.buffer,
       {
         access: "private",
@@ -603,7 +603,7 @@ app.delete("/api/admin/payment-methods/:id", auth, adminOnly, async (req, res, n
 });
 
 const orderSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true`;
-const orderDetailSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name, fa.id AS funded_account_id, fa.account_email, fa.account_password_encrypted FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true LEFT JOIN funded_accounts fa ON fa.order_id=o.id`;
+const orderDetailSelect = `SELECT o.*, p.status AS payment_record_status, p.transaction_id, p.submitted_at, p.verified_at, pp.id AS payment_proof_id, pp.storage_path AS payment_proof, pp.original_name AS payment_proof_name FROM orders o LEFT JOIN payments p ON p.order_id=o.id LEFT JOIN LATERAL (SELECT * FROM payment_proofs WHERE payment_id=p.id ORDER BY created_at DESC LIMIT 1) pp ON true`;
 
 function formatUsd(value) {
   const rounded = Math.round(value * 100) / 100;
@@ -720,16 +720,7 @@ app.get("/api/orders/:id", auth, async (req, res, next) => {
       [req.params.id, req.user.id],
     );
     if (!result.rowCount) return jsonError(res, 404, "Order not found.");
-    const order = result.rows[0];
-    let fundedAccount = null;
-    if (order.funded_account_id && (req.user.is_admin || order.user_id === req.user.id)) {
-      fundedAccount = {
-        id: order.funded_account_id,
-        email: order.account_email,
-        password: safeDecryptSecret(order.account_password_encrypted),
-      };
-    }
-    res.json({ order: { ...order, fundedAccount } });
+    res.json({ order: result.rows[0] });
   } catch (error) {
     next(error);
   }
@@ -868,6 +859,298 @@ app.post(
     }
   },
 );
+
+function publicPasswordReset(row) {
+  return {
+    id: String(row.id),
+    userId: row.user_id,
+    fundedAccountId: String(row.funded_account_id),
+    accountIdentifier: row.account_identifier,
+    amount: Number(row.amount),
+    currency: row.currency,
+    paymentMethodId: row.payment_method_id,
+    paymentMethodName: row.payment_method_name,
+    network: row.network,
+    paymentStatus: row.payment_status,
+    resetStatus: row.reset_status,
+    transactionId: row.transaction_id,
+    paymentProofId: row.payment_proof ? String(row.id) : null,
+    paymentProofName: row.payment_proof_name,
+    rejectionReason: row.rejection_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    reviewedAt: row.reviewed_at,
+    userName: row.user_name,
+    userEmail: row.user_email,
+    orderId: row.order_id ? String(row.order_id) : undefined,
+    brokerName: row.broker_name,
+  };
+}
+
+app.get("/api/password-resets", auth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT pr.*, fa.order_id, o.broker_name
+       FROM password_reset_requests pr
+       JOIN funded_accounts fa ON fa.id=pr.funded_account_id
+       JOIN orders o ON o.id=fa.order_id
+       WHERE pr.user_id=$1 ORDER BY pr.created_at DESC`,
+      [req.user.id],
+    );
+    res.json({ passwordResets: result.rows.map(publicPasswordReset) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/password-resets", auth, async (req, res, next) => {
+  const identifier = String(req.body?.accountIdentifier || "").trim();
+  const newPassword = String(req.body?.newPassword || "");
+  const paymentMethodId = String(req.body?.paymentMethodId || "").trim();
+  if (!identifier || newPassword.length < 8 || newPassword.length > 256 || !paymentMethodId)
+    return jsonError(
+      res,
+      400,
+      "Account identifier, payment method, and a valid new password are required.",
+    );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const account = await client.query(
+      `SELECT fa.id, fa.order_id, o.order_status
+       FROM funded_accounts fa JOIN orders o ON o.id=fa.order_id
+       WHERE fa.user_id=$1 AND lower(fa.account_email)=lower($2) AND o.order_status IN ('approved','active')
+       FOR UPDATE`,
+      [req.user.id, identifier],
+    );
+    if (!account.rowCount)
+      return await rollbackError(
+        client,
+        res,
+        404,
+        "No active funded account matches that identifier.",
+      );
+    const existing = await client.query(
+      "SELECT id,reset_status FROM password_reset_requests WHERE user_id=$1 AND funded_account_id=$2 AND reset_status='pending'",
+      [req.user.id, account.rows[0].id],
+    );
+    if (existing.rowCount)
+      return await rollbackError(
+        client,
+        res,
+        409,
+        "A password reset payment is already pending for this account.",
+      );
+    const method = await client.query(
+      "SELECT * FROM payment_methods WHERE id=$1 AND enabled=true",
+      [paymentMethodId],
+    );
+    if (!method.rowCount)
+      return await rollbackError(client, res, 400, "Payment method is unavailable.");
+    const m = method.rows[0];
+    const result = await client.query(
+      `INSERT INTO password_reset_requests
+       (user_id,funded_account_id,account_identifier,requested_password_encrypted,payment_method_id,payment_method_name,network,deposit_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [
+        req.user.id,
+        account.rows[0].id,
+        identifier,
+        encryptSecret(newPassword),
+        m.id,
+        m.name,
+        m.network,
+        m.deposit_address,
+      ],
+    );
+    await audit(client, req.user.id, "password_reset.created", "password_reset", result.rows[0].id);
+    await client.query("COMMIT");
+    res.status(201).json({ passwordReset: publicPasswordReset(result.rows[0]) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505")
+      return jsonError(res, 409, "A password reset payment is already pending for this account.");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post(
+  "/api/password-resets/:id/payment-proof",
+  auth,
+  upload.single("paymentProof"),
+  async (req, res, next) => {
+    if (!req.file) return jsonError(res, 400, "Payment screenshot is required.");
+    let storedProofPath;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const found = await client.query(
+        "SELECT * FROM password_reset_requests WHERE id=$1 AND user_id=$2 FOR UPDATE",
+        [req.params.id, req.user.id],
+      );
+      if (!found.rowCount)
+        return await rollbackError(client, res, 404, "Password reset request not found.");
+      if (found.rows[0].reset_status !== "pending")
+        return await rollbackError(
+          client,
+          res,
+          409,
+          "This password reset request is no longer pending.",
+        );
+      storedProofPath = await storePaymentProof(req.file, req.params.id, "password-reset-proofs");
+      await client.query(
+        `UPDATE password_reset_requests
+         SET payment_status='pending',transaction_id=$1,payment_proof=$2,payment_proof_name=$3,
+             payment_proof_mime_type=$4,payment_proof_size_bytes=$5,updated_at=now()
+         WHERE id=$6`,
+        [
+          req.body.transactionId || null,
+          storedProofPath,
+          req.file.originalname,
+          req.file.mimetype,
+          req.file.size,
+          req.params.id,
+        ],
+      );
+      const updated = await client.query("SELECT * FROM password_reset_requests WHERE id=$1", [
+        req.params.id,
+      ]);
+      await audit(
+        client,
+        req.user.id,
+        "password_reset.proof_submitted",
+        "password_reset",
+        req.params.id,
+      );
+      await client.query("COMMIT");
+      res.status(201).json({ passwordReset: publicPasswordReset(updated.rows[0]) });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (useBlobStorage && storedProofPath)
+        await deleteBlob(storedProofPath, { token: blobToken }).catch(() => undefined);
+      next(error);
+    } finally {
+      client.release();
+    }
+  },
+);
+
+app.get("/api/admin/password-resets", auth, adminOnly, async (_req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT pr.*, u.name AS user_name, u.email AS user_email, fa.order_id, o.broker_name
+       FROM password_reset_requests pr
+       JOIN users u ON u.id=pr.user_id
+       JOIN funded_accounts fa ON fa.id=pr.funded_account_id
+       JOIN orders o ON o.id=fa.order_id
+       ORDER BY pr.created_at DESC`,
+    );
+    res.json({ passwordResets: result.rows.map(publicPasswordReset) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/password-resets/:id/payment-proof", auth, adminOnly, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT payment_proof,payment_proof_name,payment_proof_mime_type FROM password_reset_requests WHERE id=$1",
+      [req.params.id],
+    );
+    if (!result.rowCount || !result.rows[0].payment_proof)
+      return jsonError(res, 404, "Payment proof not found.");
+    const proof = result.rows[0];
+    if (!useBlobStorage) {
+      return res.sendFile(path.basename(proof.payment_proof), {
+        root: uploadDir,
+        headers: { "Content-Disposition": "inline" },
+      });
+    }
+    const blob = await getBlob(proof.payment_proof, { access: "private", token: blobToken });
+    if (!blob?.stream) return jsonError(res, 404, "Payment proof not found.");
+    res.setHeader("Content-Type", proof.payment_proof_mime_type);
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${path.basename(proof.payment_proof_name).replace(/[\r\n"]/g, "")}"`,
+    );
+    return Readable.fromWeb(blob.stream).pipe(res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/admin/password-resets/:id/status", auth, adminOnly, async (req, res, next) => {
+  const targetStatus = req.body?.status;
+  if (!["approved", "rejected"].includes(targetStatus))
+    return jsonError(res, 400, "Invalid password reset status.");
+  const reason =
+    typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 1000) : null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const found = await client.query(
+      `SELECT pr.*, u.account_status, fa.account_password_encrypted, o.order_status
+       FROM password_reset_requests pr
+       JOIN users u ON u.id=pr.user_id
+       JOIN funded_accounts fa ON fa.id=pr.funded_account_id
+       JOIN orders o ON o.id=fa.order_id WHERE pr.id=$1 FOR UPDATE`,
+      [req.params.id],
+    );
+    if (!found.rowCount)
+      return await rollbackError(client, res, 404, "Password reset request not found.");
+    const reset = found.rows[0];
+    if (reset.reset_status !== "pending")
+      return await rollbackError(
+        client,
+        res,
+        409,
+        "This password reset request was already reviewed.",
+      );
+    if (targetStatus === "approved") {
+      if (
+        reset.payment_status !== "pending" ||
+        !reset.payment_proof ||
+        reset.account_status !== "active" ||
+        !["approved", "active"].includes(reset.order_status)
+      )
+        return await rollbackError(
+          client,
+          res,
+          409,
+          "This reset request is not eligible for approval.",
+        );
+      await client.query(
+        "UPDATE funded_accounts SET account_password_encrypted=$1,updated_at=now() WHERE id=$2",
+        [reset.requested_password_encrypted, reset.funded_account_id],
+      );
+      await client.query(
+        "UPDATE password_reset_requests SET payment_status='confirmed',reset_status='approved',reviewed_by=$1,reviewed_at=now(),updated_at=now() WHERE id=$2",
+        [req.user.id, req.params.id],
+      );
+    } else {
+      await client.query(
+        "UPDATE password_reset_requests SET payment_status='rejected',reset_status='rejected',rejection_reason=$1,reviewed_by=$2,reviewed_at=now(),updated_at=now() WHERE id=$3",
+        [reason, req.user.id, req.params.id],
+      );
+    }
+    await audit(
+      client,
+      req.user.id,
+      `password_reset.${targetStatus}`,
+      "password_reset",
+      req.params.id,
+    );
+    await client.query("COMMIT");
+    res.json({ status: targetStatus });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    next(error);
+  } finally {
+    client.release();
+  }
+});
 
 app.get("/api/admin/payment-methods", auth, adminOnly, async (_req, res, next) => {
   try {

@@ -135,6 +135,40 @@ CREATE TABLE IF NOT EXISTS payment_proofs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  funded_account_id BIGINT NOT NULL REFERENCES funded_accounts(id) ON DELETE CASCADE,
+  account_identifier TEXT NOT NULL,
+  requested_password_encrypted TEXT NOT NULL,
+  payment_method_id TEXT NOT NULL REFERENCES payment_methods(id),
+  payment_method_name TEXT NOT NULL,
+  network TEXT NOT NULL,
+  deposit_address TEXT NOT NULL,
+  amount NUMERIC(12, 2) NOT NULL DEFAULT 5.00 CHECK (amount = 5.00),
+  currency TEXT NOT NULL DEFAULT 'USD',
+  payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'confirmed', 'rejected')),
+  reset_status TEXT NOT NULL DEFAULT 'pending' CHECK (reset_status IN ('pending', 'approved', 'rejected')),
+  transaction_id TEXT,
+  payment_proof TEXT,
+  payment_proof_name TEXT,
+  payment_proof_mime_type TEXT,
+  payment_proof_size_bytes INTEGER,
+  rejection_reason TEXT,
+  reviewed_by UUID REFERENCES users(id),
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS password_reset_requests_user_idx
+  ON password_reset_requests(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS password_reset_requests_status_idx
+  ON password_reset_requests(reset_status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_user_account_idx
+  ON password_reset_requests(user_id, funded_account_id)
+  WHERE reset_status = 'pending';
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGSERIAL PRIMARY KEY,
   actor_user_id UUID REFERENCES users(id),

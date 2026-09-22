@@ -90,6 +90,30 @@ export type FundedAccount = {
   password: string;
   createdAt: string;
 };
+export type PasswordResetRequest = {
+  id: string;
+  userId: string;
+  fundedAccountId: string;
+  orderId?: string;
+  accountIdentifier: string;
+  amount: number;
+  currency: string;
+  paymentMethodId: string;
+  paymentMethodName: string;
+  network: string;
+  paymentStatus: PaymentStatus;
+  resetStatus: "pending" | "approved" | "rejected";
+  transactionId?: string;
+  paymentProofId?: string | null;
+  paymentProofName?: string;
+  rejectionReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt?: string;
+  userName?: string;
+  userEmail?: string;
+  brokerName?: string;
+};
 export type ApiFailureKind = "network" | "timeout" | "http";
 
 export type CurrentUserResult =
@@ -677,6 +701,75 @@ export async function getFundedAccountForOrder(orderId: string) {
     `/api/orders/${encodeURIComponent(orderId)}/funded-account`,
   );
   return result.fundedAccount;
+}
+function mapPasswordReset(row: any): PasswordResetRequest {
+  return {
+    id: normalizePlainText(row.id),
+    userId: normalizePlainText(row.userId ?? row.user_id),
+    fundedAccountId: normalizePlainText(row.fundedAccountId ?? row.funded_account_id),
+    orderId: normalizePlainText(row.orderId ?? row.order_id),
+    accountIdentifier: row.accountIdentifier ?? row.account_identifier,
+    amount: Number(row.amount),
+    currency: row.currency,
+    paymentMethodId: normalizePlainText(row.paymentMethodId ?? row.payment_method_id),
+    paymentMethodName: row.paymentMethodName ?? row.payment_method_name,
+    network: row.network,
+    paymentStatus: row.paymentStatus ?? row.payment_status,
+    resetStatus: row.resetStatus ?? row.reset_status,
+    transactionId: row.transactionId ?? row.transaction_id,
+    paymentProofId: row.paymentProofId ?? row.payment_proof_id,
+    paymentProofName: row.paymentProofName ?? row.payment_proof_name,
+    rejectionReason: row.rejectionReason ?? row.rejection_reason,
+    createdAt: row.createdAt ?? row.created_at,
+    updatedAt: row.updatedAt ?? row.updated_at,
+    reviewedAt: row.reviewedAt ?? row.reviewed_at,
+    userName: row.userName ?? row.user_name,
+    userEmail: row.userEmail ?? row.user_email,
+    brokerName: row.brokerName ?? row.broker_name,
+  };
+}
+export async function getPasswordResetsForUser() {
+  const result = await request<{ passwordResets: any[] }>("/api/password-resets");
+  return result.passwordResets.map(mapPasswordReset);
+}
+export async function createPasswordReset(input: {
+  accountIdentifier: string;
+  newPassword: string;
+  paymentMethodId: string;
+}) {
+  const result = await request<{ passwordReset: any }>("/api/password-resets", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return mapPasswordReset(result.passwordReset);
+}
+export async function submitPasswordResetProof(input: {
+  requestId: string;
+  transactionHash?: string;
+  paymentProof: File;
+}) {
+  const form = new FormData();
+  form.append("paymentProof", input.paymentProof);
+  if (input.transactionHash) form.append("transactionId", input.transactionHash);
+  const result = await request<{ passwordReset: any }>(
+    `/api/password-resets/${encodeURIComponent(input.requestId)}/payment-proof`,
+    { method: "POST", body: form },
+  );
+  return mapPasswordReset(result.passwordReset);
+}
+export async function getPasswordResetsForAdmin() {
+  const result = await request<{ passwordResets: any[] }>("/api/admin/password-resets");
+  return result.passwordResets.map(mapPasswordReset);
+}
+export async function updatePasswordResetForAdmin(input: {
+  requestId: string;
+  status: "approved" | "rejected";
+  reason?: string;
+}) {
+  return request<{ status: string }>(
+    `/api/admin/password-resets/${encodeURIComponent(input.requestId)}/status`,
+    { method: "PATCH", body: JSON.stringify({ status: input.status, reason: input.reason || "" }) },
+  );
 }
 export async function createOrder(input: {
   userId?: string;

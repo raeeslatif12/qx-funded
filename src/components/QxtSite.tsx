@@ -19,7 +19,15 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   brokers,
   challengePlans,
@@ -33,19 +41,23 @@ import {
 import { useAuth } from "@/lib/auth";
 import {
   getActiveBrokersWithCache,
-  getConnectionMode,
   getCachedBrokers,
   getCachedPlans,
   getPlansWithCache,
+  createPasswordReset,
+  getActivePaymentMethods,
+  getPasswordResetsForUser,
   loginUser,
   logoutUser,
   registerUser,
-  subscribeConnectionMode,
+  submitPasswordResetProof,
   updateAccountSettings,
   ApiError,
   type AccountStatus,
   type BrokerRecord,
   type PlanRecord,
+  type PaymentMethod,
+  type PasswordResetRequest,
 } from "@/lib/backend";
 import type { LegalDocument } from "@/lib/qxt-legal-data";
 
@@ -383,18 +395,10 @@ export function GoldLink({
 }
 
 export function Layout({ children, minimal = false }: { children: ReactNode; minimal?: boolean }) {
-  const [mode, setMode] = useState(getConnectionMode);
-  useEffect(() => subscribeConnectionMode(setMode), []);
   return (
     <div className="min-h-screen bg-background text-foreground">
       {!minimal && <Header />}
       <div className={minimal ? "" : "pt-16"}>
-        {mode === "local" && (
-          <div className="border-b border-amber-400/30 bg-amber-400/10 px-4 py-2 text-center text-xs text-amber-200">
-            LOCAL MODE · Saved data and local accounts are active. Payments and admin actions
-            require the backend.
-          </div>
-        )}
         <main>{children}</main>
         {!minimal && <Footer />}
         {!minimal && <CookieBanner />}
@@ -1616,6 +1620,14 @@ export function LoginPage() {
           >
             {mode === "login" ? "Create an account" : "Already have an account? Sign in"}
           </button>
+          {mode === "login" && (
+            <Link
+              to="/forgot-password"
+              className="mt-4 block text-sm text-muted-foreground hover:text-gold"
+            >
+              Forgot funded-account password?
+            </Link>
+          )}
         </div>
         <aside className="auth-aside">
           <blockquote>
@@ -1633,6 +1645,284 @@ export function LoginPage() {
         </aside>
       </div>
     </Layout>
+  );
+}
+
+export function ForgotPasswordPage() {
+  const { user, initializing } = useAuth();
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
+  const [resets, setResets] = useState<PasswordResetRequest[]>([]);
+  const [request, setRequest] = useState<PasswordResetRequest | null>(null);
+  const [selectedMethod, setSelectedMethod] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!user) return;
+    try {
+      const [loadedMethods, loadedResets] = await Promise.all([
+        getActivePaymentMethods(),
+        getPasswordResetsForUser(),
+      ]);
+      setMethods(loadedMethods);
+      setResets(loadedResets);
+      const pending = loadedResets.find((entry) => entry.resetStatus === "pending");
+      if (pending) setRequest(pending);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load password reset status.");
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    void load();
+    const interval = window.setInterval(() => void load(), 10000);
+    return () => window.clearInterval(interval);
+  }, [load, user]);
+
+  const createRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const accountIdentifier = String(data.get("accountIdentifier") || "").trim();
+    const newPassword = String(data.get("newPassword") || "");
+    const confirmPassword = String(data.get("confirmPassword") || "");
+    if (newPassword !== confirmPassword) {
+      setError("The new passwords do not match.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError("The new password must be at least 8 characters long.");
+      return;
+    }
+    if (!selectedMethod) {
+      setError("Select a payment method first.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const created = await createPasswordReset({
+        accountIdentifier,
+        newPassword,
+        paymentMethodId: selectedMethod,
+      });
+      setRequest(created);
+      setMessage("Reset request created. Upload payment proof to submit it for review.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to create the reset request.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitProof = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!request) return;
+    const data = new FormData(event.currentTarget);
+    const file = data.get("paymentProof");
+    if (!(file instanceof File) || !file.size) {
+      setError("A payment screenshot is required.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setError("Payment proof must be 4 MB or smaller.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const updated = await submitPasswordResetProof({
+        requestId: request.id,
+        transactionHash: String(data.get("transactionHash") || ""),
+        paymentProof: file,
+      });
+      setRequest(updated);
+      setResets((current) => [updated, ...current.filter((entry) => entry.id !== updated.id)]);
+      setMessage("Payment proof submitted. Wait for admin verification.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to submit payment proof.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (initializing) return <LoadingPage />;
+  if (!user)
+    return (
+      <FlowShell
+        eyebrow="Password reset"
+        title="Sign in to continue"
+        copy="Password resets require an authenticated customer session."
+      >
+        <Link to="/login" className="btn-gold mt-7">
+          Sign in <ArrowRight size={15} />
+        </Link>
+      </FlowShell>
+    );
+  if (user.accountStatus !== "active") return <AccountStatusScreen status={user.accountStatus} />;
+  const activeMethod = methods.find(
+    (method) => method.id === (request?.paymentMethodId || selectedMethod),
+  );
+  const reviewed = request && request.resetStatus !== "pending";
+  return (
+    <FlowShell
+      eyebrow="Secure account recovery"
+      title="Reset funded-account password"
+      copy="A $5 payment and admin approval are required before the password changes."
+    >
+      <div className="mt-10 max-w-2xl space-y-6">
+        {request ? (
+          <div className="order-card">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-muted-foreground">Reset request</p>
+                <p className="mt-1 font-mono text-sm">#{request.id}</p>
+              </div>
+              <strong
+                className={
+                  request.resetStatus === "rejected"
+                    ? "text-red-400"
+                    : request.resetStatus === "approved"
+                      ? "text-gold"
+                      : "text-amber-300"
+                }
+              >
+                {request.resetStatus === "approved"
+                  ? "Approved"
+                  : request.resetStatus === "rejected"
+                    ? "Rejected"
+                    : request.paymentProofId
+                      ? "Pending Verification"
+                      : "Payment Required"}
+              </strong>
+            </div>
+            {request.resetStatus === "approved" ? (
+              <p className="mt-5 text-sm text-gold">
+                Your funded-account password was updated successfully.
+              </p>
+            ) : reviewed ? (
+              <p className="mt-5 text-sm text-red-300">
+                Payment rejected. Submit a new request to try again.
+              </p>
+            ) : request.paymentProofId ? (
+              <p className="mt-5 text-sm text-muted-foreground">
+                Your proof is stored securely and awaiting admin review.
+              </p>
+            ) : (
+              <form className="mt-6 grid gap-5" onSubmit={submitProof}>
+                <p className="text-sm">
+                  Send <b>$5 USD</b> using <b>{activeMethod?.name || request.paymentMethodName}</b>.
+                </p>
+                {activeMethod && (
+                  <div className="rounded-md border border-border bg-muted p-3 text-sm">
+                    <p>{activeMethod.instructions}</p>
+                    <p className="mt-3 break-all font-mono text-xs">
+                      {activeMethod.depositAddress}
+                    </p>
+                  </div>
+                )}
+                <label>
+                  Payment proof
+                  <input
+                    name="paymentProof"
+                    required
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="field mt-2 p-2"
+                  />
+                </label>
+                <label>
+                  Transaction ID / TXID <span className="text-muted-foreground">(optional)</span>
+                  <input name="transactionHash" className="field mt-2" />
+                </label>
+                <button className="btn-gold w-fit" type="submit" disabled={submitting}>
+                  {submitting ? "Submitting..." : "Submit Payment Proof"}
+                </button>
+              </form>
+            )}
+          </div>
+        ) : (
+          <form className="order-card grid gap-5" onSubmit={createRequest}>
+            <label>
+              Funded account email
+              <input
+                name="accountIdentifier"
+                required
+                type="email"
+                className="field mt-2"
+                placeholder="customer-account@example.com"
+              />
+            </label>
+            <label>
+              New password
+              <input
+                name="newPassword"
+                required
+                minLength={8}
+                type="password"
+                className="field mt-2"
+                autoComplete="new-password"
+              />
+            </label>
+            <label>
+              Confirm new password
+              <input
+                name="confirmPassword"
+                required
+                minLength={8}
+                type="password"
+                className="field mt-2"
+                autoComplete="new-password"
+              />
+            </label>
+            <div className="rounded-md border border-gold/30 bg-gold/10 p-4">
+              <p className="font-semibold text-gold">Password Reset Fee: $5</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Select a configured payment method to continue.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {methods.map((method) => (
+                <button
+                  type="button"
+                  key={method.id}
+                  onClick={() => setSelectedMethod(method.id)}
+                  className={`rounded-md border p-3 text-left ${selectedMethod === method.id ? "border-gold ring-1 ring-gold" : "border-border"}`}
+                >
+                  <b>{method.name}</b>
+                  <span className="mt-1 block text-xs text-muted-foreground">{method.network}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn-gold w-fit"
+              type="submit"
+              disabled={submitting || !selectedMethod}
+            >
+              {submitting ? "Creating..." : "Continue to Payment"}
+            </button>
+          </form>
+        )}
+        {(error || message) && (
+          <p className={error ? "text-sm text-destructive" : "text-sm text-gold"}>
+            {error || message}
+          </p>
+        )}
+        {resets.length > 1 && (
+          <div className="order-card">
+            <h2 className="font-semibold">Previous reset requests</h2>
+            <div className="mt-4 grid gap-2 text-sm">
+              {resets.slice(1).map((entry) => (
+                <p key={entry.id}>
+                  #{entry.id} · {entry.resetStatus}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </FlowShell>
   );
 }
 
