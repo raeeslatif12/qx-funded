@@ -1646,6 +1646,31 @@ export function LoginPage() {
   );
 }
 
+function PasswordResetShell({
+  children,
+  eyebrow,
+  title,
+  copy,
+}: {
+  children?: ReactNode;
+  eyebrow: string;
+  title: string;
+  copy: string;
+}) {
+  return (
+    <Layout>
+      <section className="section">
+        <div className="container-x max-w-5xl">
+          <p className="eyebrow">{eyebrow}</p>
+          <h1 className="mt-4 text-4xl font-semibold">{title}</h1>
+          <p className="mt-3 max-w-2xl text-muted-foreground">{copy}</p>
+          {children}
+        </div>
+      </section>
+    </Layout>
+  );
+}
+
 export function ForgotPasswordPage() {
   const { user, initializing } = useAuth();
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
@@ -1757,7 +1782,7 @@ export function ForgotPasswordPage() {
     );
   if (!user)
     return (
-      <FlowShell
+      <PasswordResetShell
         eyebrow="Password reset"
         title="Sign in to continue"
         copy="Password resets require an authenticated customer session."
@@ -1765,7 +1790,7 @@ export function ForgotPasswordPage() {
         <Link to="/login" className="btn-gold mt-7">
           Sign in <ArrowRight size={15} />
         </Link>
-      </FlowShell>
+      </PasswordResetShell>
     );
   if (user.accountStatus !== "active") return <AccountStatusScreen status={user.accountStatus} />;
   const activeMethod = methods.find(
@@ -1773,7 +1798,7 @@ export function ForgotPasswordPage() {
   );
   const reviewed = request && request.resetStatus !== "pending";
   return (
-    <FlowShell
+    <PasswordResetShell
       eyebrow="Secure account recovery"
       title="Reset funded-account password"
       copy="A $5 payment and admin approval are required before the password changes."
@@ -1929,7 +1954,7 @@ export function ForgotPasswordPage() {
           </div>
         )}
       </div>
-    </FlowShell>
+    </PasswordResetShell>
   );
 }
 
