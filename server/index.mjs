@@ -887,8 +887,65 @@ function publicPasswordReset(row) {
   };
 }
 
+let passwordResetSchemaReady;
+function ensurePasswordResetSchema() {
+  if (!passwordResetSchemaReady) {
+    passwordResetSchemaReady = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS password_reset_requests (
+          id BIGSERIAL PRIMARY KEY,
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          funded_account_id BIGINT REFERENCES funded_accounts(id) ON DELETE CASCADE,
+          account_identifier TEXT NOT NULL,
+          requested_password_encrypted TEXT NOT NULL,
+          access_token_hash TEXT,
+          payment_method_id TEXT NOT NULL REFERENCES payment_methods(id),
+          payment_method_name TEXT NOT NULL,
+          network TEXT NOT NULL,
+          deposit_address TEXT NOT NULL,
+          amount NUMERIC(12, 2) NOT NULL DEFAULT 5.00 CHECK (amount = 5.00),
+          currency TEXT NOT NULL DEFAULT 'USD',
+          payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'confirmed', 'rejected')),
+          reset_status TEXT NOT NULL DEFAULT 'pending' CHECK (reset_status IN ('pending', 'approved', 'rejected')),
+          transaction_id TEXT,
+          payment_proof TEXT,
+          payment_proof_name TEXT,
+          payment_proof_mime_type TEXT,
+          payment_proof_size_bytes INTEGER,
+          rejection_reason TEXT,
+          reviewed_by UUID REFERENCES users(id),
+          reviewed_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `);
+      await pool.query("ALTER TABLE password_reset_requests ALTER COLUMN user_id DROP NOT NULL");
+      await pool.query(
+        "ALTER TABLE password_reset_requests ALTER COLUMN funded_account_id DROP NOT NULL",
+      );
+      await pool.query(
+        "ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS access_token_hash TEXT",
+      );
+      await pool.query(
+        "CREATE INDEX IF NOT EXISTS password_reset_requests_user_idx ON password_reset_requests(user_id, created_at DESC)",
+      );
+      await pool.query(
+        "CREATE INDEX IF NOT EXISTS password_reset_requests_status_idx ON password_reset_requests(reset_status, created_at DESC)",
+      );
+      await pool.query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_identifier_idx ON password_reset_requests(lower(account_identifier)) WHERE reset_status = 'pending'",
+      );
+    })().catch((error) => {
+      passwordResetSchemaReady = undefined;
+      throw error;
+    });
+  }
+  return passwordResetSchemaReady;
+}
+
 app.get("/api/password-resets", auth, async (req, res, next) => {
   try {
+    await ensurePasswordResetSchema();
     const result = await pool.query(
       `SELECT pr.*, fa.order_id, o.broker_name
        FROM password_reset_requests pr
@@ -915,6 +972,7 @@ app.post("/api/password-resets", async (req, res, next) => {
     );
   const client = await pool.connect();
   try {
+    await ensurePasswordResetSchema();
     await client.query("BEGIN");
     const method = await client.query(
       "SELECT * FROM payment_methods WHERE id=$1 AND enabled=true",
@@ -959,6 +1017,7 @@ app.post(
     let storedProofPath;
     const client = await pool.connect();
     try {
+      await ensurePasswordResetSchema();
       await client.query("BEGIN");
       const token = String(req.headers["x-password-reset-token"] || req.body?.accessToken || "");
       if (!token)
@@ -1010,6 +1069,7 @@ app.post(
 
 app.get("/api/admin/password-resets", auth, adminOnly, async (_req, res, next) => {
   try {
+    await ensurePasswordResetSchema();
     const result = await pool.query(
       `SELECT pr.*, u.name AS user_name, u.email AS user_email, fa.order_id, o.broker_name
        FROM password_reset_requests pr
@@ -1026,6 +1086,7 @@ app.get("/api/admin/password-resets", auth, adminOnly, async (_req, res, next) =
 
 app.get("/api/admin/password-resets/:id/payment-proof", auth, adminOnly, async (req, res, next) => {
   try {
+    await ensurePasswordResetSchema();
     const result = await pool.query(
       "SELECT payment_proof,payment_proof_name,payment_proof_mime_type FROM password_reset_requests WHERE id=$1",
       [req.params.id],
@@ -1060,6 +1121,7 @@ app.patch("/api/admin/password-resets/:id/status", auth, adminOnly, async (req, 
     typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 1000) : null;
   const client = await pool.connect();
   try {
+    await ensurePasswordResetSchema();
     await client.query("BEGIN");
     const found = await client.query(
       `SELECT pr.*, u.account_status, fa.account_password_encrypted, o.order_status
