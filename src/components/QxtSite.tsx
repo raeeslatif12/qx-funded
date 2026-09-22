@@ -1533,6 +1533,8 @@ export function LoginPage() {
         const plan =
           new URL(destination, "http://local").searchParams.get("plan") || "instant-3000";
         navigate({ to: "/checkout/broker", search: { plan } });
+      } else if (destination === "/forgot-password") {
+        navigate({ to: "/forgot-password" });
       } else navigate({ to: "/dashboard" });
     } catch (caught) {
       if (caught instanceof ApiError && caught.accountStatus) {
@@ -1787,7 +1789,11 @@ export function ForgotPasswordPage() {
         title="Sign in to continue"
         copy="Password resets require an authenticated customer session."
       >
-        <Link to="/login" className="btn-gold mt-7">
+        <Link
+          to="/login"
+          search={{ redirect: "/forgot-password" } as any}
+          className="btn-gold mt-7"
+        >
           Sign in <ArrowRight size={15} />
         </Link>
       </PasswordResetShell>
