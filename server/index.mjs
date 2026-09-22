@@ -864,7 +864,7 @@ function publicPasswordReset(row) {
   return {
     id: String(row.id),
     userId: row.user_id,
-    fundedAccountId: String(row.funded_account_id),
+    fundedAccountId: row.funded_account_id ? String(row.funded_account_id) : null,
     accountIdentifier: row.account_identifier,
     amount: Number(row.amount),
     currency: row.currency,
@@ -881,7 +881,7 @@ function publicPasswordReset(row) {
     updatedAt: row.updated_at,
     reviewedAt: row.reviewed_at,
     userName: row.user_name,
-    userEmail: row.user_email,
+    userEmail: row.user_email || row.account_identifier,
     orderId: row.order_id ? String(row.order_id) : undefined,
     brokerName: row.broker_name,
   };
@@ -903,7 +903,7 @@ app.get("/api/password-resets", auth, async (req, res, next) => {
   }
 });
 
-app.post("/api/password-resets", auth, async (req, res, next) => {
+app.post("/api/password-resets", async (req, res, next) => {
   const identifier = String(req.body?.accountIdentifier || "").trim();
   const newPassword = String(req.body?.newPassword || "");
   const paymentMethodId = String(req.body?.paymentMethodId || "").trim();
@@ -916,31 +916,6 @@ app.post("/api/password-resets", auth, async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const account = await client.query(
-      `SELECT fa.id, fa.order_id, o.order_status
-       FROM funded_accounts fa JOIN orders o ON o.id=fa.order_id
-       WHERE fa.user_id=$1 AND lower(fa.account_email)=lower($2) AND o.order_status IN ('approved','active')
-       FOR UPDATE`,
-      [req.user.id, identifier],
-    );
-    if (!account.rowCount)
-      return await rollbackError(
-        client,
-        res,
-        404,
-        "No active funded account matches that identifier.",
-      );
-    const existing = await client.query(
-      "SELECT id,reset_status FROM password_reset_requests WHERE user_id=$1 AND funded_account_id=$2 AND reset_status='pending'",
-      [req.user.id, account.rows[0].id],
-    );
-    if (existing.rowCount)
-      return await rollbackError(
-        client,
-        res,
-        409,
-        "A password reset payment is already pending for this account.",
-      );
     const method = await client.query(
       "SELECT * FROM payment_methods WHERE id=$1 AND enabled=true",
       [paymentMethodId],
@@ -948,28 +923,28 @@ app.post("/api/password-resets", auth, async (req, res, next) => {
     if (!method.rowCount)
       return await rollbackError(client, res, 400, "Payment method is unavailable.");
     const m = method.rows[0];
+    const accessToken = createToken();
     const result = await client.query(
       `INSERT INTO password_reset_requests
-       (user_id,funded_account_id,account_identifier,requested_password_encrypted,payment_method_id,payment_method_name,network,deposit_address)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+       (account_identifier,requested_password_encrypted,access_token_hash,payment_method_id,payment_method_name,network,deposit_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [
-        req.user.id,
-        account.rows[0].id,
         identifier,
         encryptSecret(newPassword),
+        hashToken(accessToken),
         m.id,
         m.name,
         m.network,
         m.deposit_address,
       ],
     );
-    await audit(client, req.user.id, "password_reset.created", "password_reset", result.rows[0].id);
+    await audit(client, null, "password_reset.created", "password_reset", result.rows[0].id);
     await client.query("COMMIT");
-    res.status(201).json({ passwordReset: publicPasswordReset(result.rows[0]) });
+    res.status(201).json({ passwordReset: publicPasswordReset(result.rows[0]), accessToken });
   } catch (error) {
     await client.query("ROLLBACK");
     if (error.code === "23505")
-      return jsonError(res, 409, "A password reset payment is already pending for this account.");
+      return jsonError(res, 409, "A password reset request is already pending for this email.");
     next(error);
   } finally {
     client.release();
@@ -978,7 +953,6 @@ app.post("/api/password-resets", auth, async (req, res, next) => {
 
 app.post(
   "/api/password-resets/:id/payment-proof",
-  auth,
   upload.single("paymentProof"),
   async (req, res, next) => {
     if (!req.file) return jsonError(res, 400, "Payment screenshot is required.");
@@ -986,9 +960,12 @@ app.post(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      const token = String(req.headers["x-password-reset-token"] || req.body?.accessToken || "");
+      if (!token)
+        return await rollbackError(client, res, 401, "Password reset authorization required.");
       const found = await client.query(
-        "SELECT * FROM password_reset_requests WHERE id=$1 AND user_id=$2 FOR UPDATE",
-        [req.params.id, req.user.id],
+        "SELECT * FROM password_reset_requests WHERE id=$1 AND access_token_hash=$2 FOR UPDATE",
+        [req.params.id, hashToken(token)],
       );
       if (!found.rowCount)
         return await rollbackError(client, res, 404, "Password reset request not found.");
@@ -1017,13 +994,7 @@ app.post(
       const updated = await client.query("SELECT * FROM password_reset_requests WHERE id=$1", [
         req.params.id,
       ]);
-      await audit(
-        client,
-        req.user.id,
-        "password_reset.proof_submitted",
-        "password_reset",
-        req.params.id,
-      );
+      await audit(client, null, "password_reset.proof_submitted", "password_reset", req.params.id);
       await client.query("COMMIT");
       res.status(201).json({ passwordReset: publicPasswordReset(updated.rows[0]) });
     } catch (error) {
@@ -1042,9 +1013,9 @@ app.get("/api/admin/password-resets", auth, adminOnly, async (_req, res, next) =
     const result = await pool.query(
       `SELECT pr.*, u.name AS user_name, u.email AS user_email, fa.order_id, o.broker_name
        FROM password_reset_requests pr
-       JOIN users u ON u.id=pr.user_id
-       JOIN funded_accounts fa ON fa.id=pr.funded_account_id
-       JOIN orders o ON o.id=fa.order_id
+       LEFT JOIN users u ON u.id=pr.user_id
+       LEFT JOIN funded_accounts fa ON fa.id=pr.funded_account_id
+       LEFT JOIN orders o ON o.id=fa.order_id
        ORDER BY pr.created_at DESC`,
     );
     res.json({ passwordResets: result.rows.map(publicPasswordReset) });
@@ -1093,9 +1064,9 @@ app.patch("/api/admin/password-resets/:id/status", auth, adminOnly, async (req, 
     const found = await client.query(
       `SELECT pr.*, u.account_status, fa.account_password_encrypted, o.order_status
        FROM password_reset_requests pr
-       JOIN users u ON u.id=pr.user_id
-       JOIN funded_accounts fa ON fa.id=pr.funded_account_id
-       JOIN orders o ON o.id=fa.order_id WHERE pr.id=$1 FOR UPDATE`,
+       LEFT JOIN users u ON u.id=pr.user_id
+       LEFT JOIN funded_accounts fa ON fa.id=pr.funded_account_id
+       LEFT JOIN orders o ON o.id=fa.order_id WHERE pr.id=$1 FOR UPDATE`,
       [req.params.id],
     );
     if (!found.rowCount)
@@ -1109,11 +1080,29 @@ app.patch("/api/admin/password-resets/:id/status", auth, adminOnly, async (req, 
         "This password reset request was already reviewed.",
       );
     if (targetStatus === "approved") {
+      const account = await client.query(
+        `SELECT fa.id, fa.user_id, o.order_status, u.account_status
+         FROM funded_accounts fa
+         JOIN orders o ON o.id=fa.order_id
+         JOIN users u ON u.id=fa.user_id
+         WHERE lower(fa.account_email)=lower($1)
+           AND o.order_status IN ('approved','active')
+         ORDER BY fa.updated_at DESC LIMIT 1
+         FOR UPDATE`,
+        [reset.account_identifier],
+      );
+      if (!account.rowCount)
+        return await rollbackError(
+          client,
+          res,
+          409,
+          "This reset request cannot be approved until the account is verified.",
+        );
+      const targetAccount = account.rows[0];
       if (
         reset.payment_status !== "pending" ||
         !reset.payment_proof ||
-        reset.account_status !== "active" ||
-        !["approved", "active"].includes(reset.order_status)
+        targetAccount.account_status !== "active"
       )
         return await rollbackError(
           client,
@@ -1123,11 +1112,11 @@ app.patch("/api/admin/password-resets/:id/status", auth, adminOnly, async (req, 
         );
       await client.query(
         "UPDATE funded_accounts SET account_password_encrypted=$1,updated_at=now() WHERE id=$2",
-        [reset.requested_password_encrypted, reset.funded_account_id],
+        [reset.requested_password_encrypted, targetAccount.id],
       );
       await client.query(
-        "UPDATE password_reset_requests SET payment_status='confirmed',reset_status='approved',reviewed_by=$1,reviewed_at=now(),updated_at=now() WHERE id=$2",
-        [req.user.id, req.params.id],
+        "UPDATE password_reset_requests SET user_id=$1,funded_account_id=$2,payment_status='confirmed',reset_status='approved',reviewed_by=$3,reviewed_at=now(),updated_at=now() WHERE id=$4",
+        [targetAccount.user_id, targetAccount.id, req.user.id, req.params.id],
       );
     } else {
       await client.query(

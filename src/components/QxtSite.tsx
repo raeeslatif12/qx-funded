@@ -46,7 +46,6 @@ import {
   getPlansWithCache,
   createPasswordReset,
   getActivePaymentMethods,
-  getPasswordResetsForUser,
   loginUser,
   logoutUser,
   registerUser,
@@ -1674,37 +1673,31 @@ function PasswordResetShell({
 }
 
 export function ForgotPasswordPage() {
-  const { user, initializing } = useAuth();
+  const [methodsLoading, setMethodsLoading] = useState(true);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
-  const [resets, setResets] = useState<PasswordResetRequest[]>([]);
   const [request, setRequest] = useState<PasswordResetRequest | null>(null);
+  const [resetToken, setResetToken] = useState("");
   const [selectedMethod, setSelectedMethod] = useState("");
+  const [hasPaid, setHasPaid] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!user) return;
+  const loadMethods = useCallback(async () => {
+    setMethodsLoading(true);
     try {
-      const [loadedMethods, loadedResets] = await Promise.all([
-        getActivePaymentMethods(),
-        getPasswordResetsForUser(),
-      ]);
+      const loadedMethods = await getActivePaymentMethods();
       setMethods(loadedMethods);
-      setResets(loadedResets);
-      const pending = loadedResets.find((entry) => entry.resetStatus === "pending");
-      if (pending) setRequest(pending);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unable to load password reset status.");
+      setError(caught instanceof Error ? caught.message : "Unable to load payment methods.");
+    } finally {
+      setMethodsLoading(false);
     }
-  }, [user]);
+  }, []);
 
   useEffect(() => {
-    if (!user) return;
-    void load();
-    const interval = window.setInterval(() => void load(), 10000);
-    return () => window.clearInterval(interval);
-  }, [load, user]);
+    void loadMethods();
+  }, [loadMethods]);
 
   const createRequest = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1712,6 +1705,7 @@ export function ForgotPasswordPage() {
     const accountIdentifier = String(data.get("accountIdentifier") || "").trim();
     const newPassword = String(data.get("newPassword") || "");
     const confirmPassword = String(data.get("confirmPassword") || "");
+    const file = data.get("paymentProof");
     if (newPassword !== confirmPassword) {
       setError("The new passwords do not match.");
       return;
@@ -1724,6 +1718,14 @@ export function ForgotPasswordPage() {
       setError("Select a payment method first.");
       return;
     }
+    if (!(file instanceof File) || !file.size) {
+      setError("A payment screenshot is required.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setError("Payment proof must be 4 MB or smaller.");
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -1732,8 +1734,15 @@ export function ForgotPasswordPage() {
         newPassword,
         paymentMethodId: selectedMethod,
       });
-      setRequest(created);
-      setMessage("Reset request created. Upload payment proof to submit it for review.");
+      const submitted = await submitPasswordResetProof({
+        requestId: created.request.id,
+        accessToken: created.accessToken,
+        transactionHash: String(data.get("transactionHash") || ""),
+        paymentProof: file,
+      });
+      setRequest(submitted);
+      setResetToken(created.accessToken);
+      setMessage("Payment proof submitted. Wait for admin verification.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create the reset request.");
     } finally {
@@ -1759,11 +1768,11 @@ export function ForgotPasswordPage() {
     try {
       const updated = await submitPasswordResetProof({
         requestId: request.id,
+        accessToken: resetToken,
         transactionHash: String(data.get("transactionHash") || ""),
         paymentProof: file,
       });
       setRequest(updated);
-      setResets((current) => [updated, ...current.filter((entry) => entry.id !== updated.id)]);
       setMessage("Payment proof submitted. Wait for admin verification.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to submit payment proof.");
@@ -1772,33 +1781,6 @@ export function ForgotPasswordPage() {
     }
   };
 
-  if (initializing)
-    return (
-      <Layout>
-        <section className="section">
-          <div className="container-x">
-            <p className="text-muted-foreground">Loading...</p>
-          </div>
-        </section>
-      </Layout>
-    );
-  if (!user)
-    return (
-      <PasswordResetShell
-        eyebrow="Password reset"
-        title="Sign in to continue"
-        copy="Password resets require an authenticated customer session."
-      >
-        <Link
-          to="/login"
-          search={{ redirect: "/forgot-password" } as any}
-          className="btn-gold mt-7"
-        >
-          Sign in <ArrowRight size={15} />
-        </Link>
-      </PasswordResetShell>
-    );
-  if (user.accountStatus !== "active") return <AccountStatusScreen status={user.accountStatus} />;
   const activeMethod = methods.find(
     (method) => method.id === (request?.paymentMethodId || selectedMethod),
   );
@@ -1881,45 +1863,16 @@ export function ForgotPasswordPage() {
             )}
           </div>
         ) : (
-          <form className="order-card grid gap-5" onSubmit={createRequest}>
-            <label>
-              Funded account email
-              <input
-                name="accountIdentifier"
-                required
-                type="email"
-                className="field mt-2"
-                placeholder="customer-account@example.com"
-              />
-            </label>
-            <label>
-              New password
-              <input
-                name="newPassword"
-                required
-                minLength={8}
-                type="password"
-                className="field mt-2"
-                autoComplete="new-password"
-              />
-            </label>
-            <label>
-              Confirm new password
-              <input
-                name="confirmPassword"
-                required
-                minLength={8}
-                type="password"
-                className="field mt-2"
-                autoComplete="new-password"
-              />
-            </label>
+          <div className="order-card grid gap-5">
             <div className="rounded-md border border-gold/30 bg-gold/10 p-4">
               <p className="font-semibold text-gold">Password Reset Fee: $5</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Select a configured payment method to continue.
+                Select a payment method, then complete payment externally.
               </p>
             </div>
+            {methodsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading payment methods...</p>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
               {methods.map((method) => (
                 <button
@@ -1933,31 +1886,79 @@ export function ForgotPasswordPage() {
                 </button>
               ))}
             </div>
+            {activeMethod && (
+              <div className="rounded-md border border-border bg-muted p-4 text-sm">
+                <p>{activeMethod.instructions}</p>
+                <p className="mt-3 break-all font-mono text-xs">{activeMethod.depositAddress}</p>
+              </div>
+            )}
             <button
+              type="button"
               className="btn-gold w-fit"
-              type="submit"
-              disabled={submitting || !selectedMethod}
+              disabled={!selectedMethod}
+              onClick={() => setHasPaid(true)}
             >
-              {submitting ? "Creating..." : "Continue to Payment"}
+              I Have Paid
             </button>
-          </form>
+            {hasPaid && (
+              <form className="grid gap-5 border-t border-border pt-5" onSubmit={createRequest}>
+                <label>
+                  Account email
+                  <input
+                    name="accountIdentifier"
+                    required
+                    type="email"
+                    className="field mt-2"
+                    placeholder="customer-account@example.com"
+                  />
+                </label>
+                <label>
+                  New password
+                  <input
+                    name="newPassword"
+                    required
+                    minLength={8}
+                    type="password"
+                    className="field mt-2"
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label>
+                  Confirm new password
+                  <input
+                    name="confirmPassword"
+                    required
+                    minLength={8}
+                    type="password"
+                    className="field mt-2"
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label>
+                  Payment proof
+                  <input
+                    name="paymentProof"
+                    required
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="field mt-2 p-2"
+                  />
+                </label>
+                <label>
+                  Transaction ID / TXID <span className="text-muted-foreground">(optional)</span>
+                  <input name="transactionHash" className="field mt-2" />
+                </label>
+                <button className="btn-gold w-fit" type="submit" disabled={submitting}>
+                  {submitting ? "Submitting..." : "Submit Reset Request"}
+                </button>
+              </form>
+            )}
+          </div>
         )}
         {(error || message) && (
           <p className={error ? "text-sm text-destructive" : "text-sm text-gold"}>
             {error || message}
           </p>
-        )}
-        {resets.length > 1 && (
-          <div className="order-card">
-            <h2 className="font-semibold">Previous reset requests</h2>
-            <div className="mt-4 grid gap-2 text-sm">
-              {resets.slice(1).map((entry) => (
-                <p key={entry.id}>
-                  #{entry.id} · {entry.resetStatus}
-                </p>
-              ))}
-            </div>
-          </div>
         )}
       </div>
     </PasswordResetShell>

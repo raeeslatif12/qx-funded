@@ -137,10 +137,11 @@ CREATE TABLE IF NOT EXISTS payment_proofs (
 
 CREATE TABLE IF NOT EXISTS password_reset_requests (
   id BIGSERIAL PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  funded_account_id BIGINT NOT NULL REFERENCES funded_accounts(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  funded_account_id BIGINT REFERENCES funded_accounts(id) ON DELETE CASCADE,
   account_identifier TEXT NOT NULL,
   requested_password_encrypted TEXT NOT NULL,
+  access_token_hash TEXT,
   payment_method_id TEXT NOT NULL REFERENCES payment_methods(id),
   payment_method_name TEXT NOT NULL,
   network TEXT NOT NULL,
@@ -167,6 +168,9 @@ CREATE INDEX IF NOT EXISTS password_reset_requests_status_idx
   ON password_reset_requests(reset_status, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_user_account_idx
   ON password_reset_requests(user_id, funded_account_id)
+  WHERE reset_status = 'pending' AND user_id IS NOT NULL AND funded_account_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_identifier_idx
+  ON password_reset_requests(lower(account_identifier))
   WHERE reset_status = 'pending';
 
 CREATE TABLE IF NOT EXISTS audit_logs (

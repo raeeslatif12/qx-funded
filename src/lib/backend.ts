@@ -737,19 +737,24 @@ export async function createPasswordReset(input: {
   newPassword: string;
   paymentMethodId: string;
 }) {
-  const result = await request<{ passwordReset: any }>("/api/password-resets", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return mapPasswordReset(result.passwordReset);
+  const result = await request<{ passwordReset: any; accessToken: string }>(
+    "/api/password-resets",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return { request: mapPasswordReset(result.passwordReset), accessToken: result.accessToken };
 }
 export async function submitPasswordResetProof(input: {
   requestId: string;
+  accessToken: string;
   transactionHash?: string;
   paymentProof: File;
 }) {
   const form = new FormData();
   form.append("paymentProof", input.paymentProof);
+  form.append("accessToken", input.accessToken);
   if (input.transactionHash) form.append("transactionId", input.transactionHash);
   const result = await request<{ passwordReset: any }>(
     `/api/password-resets/${encodeURIComponent(input.requestId)}/payment-proof`,

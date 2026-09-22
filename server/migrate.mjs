@@ -241,6 +241,13 @@ async function ensureOrderConstraints() {
 }
 
 async function ensurePasswordResetColumns() {
+  await pool.query("ALTER TABLE password_reset_requests ALTER COLUMN user_id DROP NOT NULL");
+  await pool.query(
+    "ALTER TABLE password_reset_requests ALTER COLUMN funded_account_id DROP NOT NULL",
+  );
+  await pool.query(
+    "ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS access_token_hash TEXT",
+  );
   await pool.query(`
     CREATE TABLE IF NOT EXISTS password_reset_requests (
       id BIGSERIAL PRIMARY KEY,
@@ -276,6 +283,9 @@ async function ensurePasswordResetColumns() {
   );
   await pool.query(
     "CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_user_account_idx ON password_reset_requests(user_id, funded_account_id) WHERE reset_status = 'pending'",
+  );
+  await pool.query(
+    "CREATE UNIQUE INDEX IF NOT EXISTS password_reset_requests_pending_identifier_idx ON password_reset_requests(lower(account_identifier)) WHERE reset_status = 'pending'",
   );
 }
 
